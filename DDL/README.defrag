@@ -1,3 +1,11 @@
+ ./README.defrag
+ 
+ Created by ./defrag.pl
+ on Sat Jan  6 12:16:33 2001
+
+
+
+
   Program 'defrag.pl' uses 5 main SQL statements to retrieve record sets which
   form the basis of generated DDL.  They are sometimes UNIONed, sometimes 
   MINUSed, etc., to refine the record sets.  The queries are:

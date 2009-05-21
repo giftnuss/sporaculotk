@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 
-# $Id: defrag.pl,v 1.17 2001/01/27 16:23:25 rvsutherland Exp $
+# $Id: defrag.pl,v 1.18 2001/04/28 13:51:28 rvsutherland Exp $
 #
 # Copyright (c) 2000, 2001 Richard Sutherland - United States of America
 #
@@ -80,7 +80,9 @@ my $tblsp;
 my $text;
 my $user = getlogin
         || scalar getpwuid( $REAL_USER_ID )
-        || undef;
+        || undef
+     unless $OSNAME eq 'MSWin32';
+$user = 'Unknown User'    unless $user;
 
 ########################################################################
 
@@ -2533,6 +2535,81 @@ sub write_header
             "$remark Created by $0\n",
             "$remark on ", scalar localtime,"\n\n\n\n";
 }
+
+# $Log: defrag.pl,v $
+# Revision 1.18  2001/04/28 13:51:28  rvsutherland
+# Fixed to work on Windows [I think].
+#
+# Revision 1.17  2001/01/27 16:23:25  rvsutherland
+# Upgraded to handle tablespaces having no tables (only indexes).
+#
+# Revision 1.16  2001/01/14 16:47:55  rvsutherland
+# Nominal changes for version 0.32
+#
+# Revision 1.15  2001/01/07 16:44:54  rvsutherland
+# Changed 'WITHOUT' to 'without' in success message of scripts
+#
+# Revision 1.14  2001/01/01 22:43:21  rvsutherland
+# Altered shell scripts to be completely self checking.
+# Added driver shell script to call all other scripts, so that defragging
+#    could take place in background while DBA eats pizza.
+#
+# Revision 1.13  2001/01/01 12:59:52  rvsutherland
+# Fixed bug in export parfile.
+#
+# Revision 1.12  2000/12/31 12:51:59  rvsutherland
+# Added ANALYZE TABLE/INDEX following Import, for previously analyzed objects
+#
+# Revision 1.11  2000/12/31 00:46:58  rvsutherland
+# Before starting, verified that Log files were writiable.
+# Modified queries in anticipation of adding ANALYZE TABLE statements
+#
+# Revision 1.10  2000/12/28 21:45:25  rvsutherland
+# Upgraded to handle table names containing '$'.
+# Corrected Statement Group 15 to MOVE the partitions back to THE TABLESPACE.
+# Put all Log files in logdir (were going to sqldir -- go figure)
+# Corrected NEXT size if object reached last tier (was null)
+#
+# Revision 1.9  2000/12/09 17:38:56  rvsutherland
+# Additional tuning refinements.
+# Minor cleanup of code.
+#
+# Revision 1.8  2000/12/06 00:43:45  rvsutherland
+# Significant performance improvements.
+# No, make that MAJOR gains (i.e., orders of magnitude for large databases).
+# To wit:
+#   Replaced convoluted Dictionary views with 8i Temporary Tables
+#   Widely (but not entirely) switched to bind variables (was interpolated,
+#     causing reparsing in most cases).
+# Also fixed error on REBUILD of Global and non-partitioned indexes.
+#
+# Revision 1.7  2000/12/02 14:06:20  rvsutherland
+# Completed 'exchange' method for handling partitions,
+# including REBUILD of UNUSABLE indexes.
+# Removed 'resize' method for handling partitions.
+#
+# Revision 1.6  2000/11/26 20:10:54  rvsutherland
+# Added 'exchange' method for handling partitions.  Will probably
+# remove the 'resize' method next update.
+#
+# Revision 1.5  2000/11/24 18:36:00  rvsutherland
+# Restructured file writes
+# Revamped 'resize' method for handling partitions
+#
+# Revision 1.4  2000/11/19 20:08:58  rvsutherland
+# Added 'resize' partitions option.
+# Restructured file creation.
+# Added shell scripts to simplify executing generated files.
+# Modified selection of IOT tables (now handled same as indexes)
+# Added validation of input arguments -- meaning we now check for
+# hanging chad and pregnant votes  ;-)
+#
+# Revision 1.3  2000/11/17 21:35:53  rvsutherland
+# Commented out Direct Path export -- Import has a bug (at least on Linux)
+#
+# Revision 1.2  2000/11/16 09:14:38  rvsutherland
+# Major restructure to take advantage of DDL::Oracle.pm
+#
 
 __END__
 

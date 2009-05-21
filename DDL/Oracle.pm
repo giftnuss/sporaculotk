@@ -1,4 +1,4 @@
-# $Id: Oracle.pm,v 1.42 2001/03/31 18:25:56 rvsutherland Exp $ 
+# $Id: Oracle.pm,v 1.51 2002/05/22 15:26:01 rvsutherland Exp $ 
 #
 # Copyright (c) 2000, 2001 Richard Sutherland - United States of America
 #
@@ -9,7 +9,7 @@ require 5.004;
 
 BEGIN
 {
-  $DDL::Oracle::VERSION = "1.07"; # Also update version in pod text below!
+  $DDL::Oracle::VERSION = "1.11"; # Also update version in pod text below!
 }
 
 package DDL::Oracle;
@@ -59,6 +59,7 @@ my %create =
   'profile'               => \&_create_profile,
   'role'                  => \&_create_role,
   'rollback segment'      => \&_create_rollback_segment,
+  'schema'                => \&_create_schema,
   'sequence'              => \&_create_sequence,
   'snapshot'              => \&_create_snapshot,
   'snapshot log'          => \&_create_snapshot_log,
@@ -124,10 +125,13 @@ sub configure
 
   $dbh               = $args{ 'dbh'  };
   $attr{ 'view' }    = ( "\U$args{ 'view'  }" eq 'USER' ) ? 'USER' : 'DBA';
-  $attr{ 'schema'  } = ( exists $args{ 'schema'  }  ) ? $args{ 'schema'  } : 1;
-  $attr{ 'resize'  } = ( exists $args{ 'resize'  }  ) ? $args{ 'resize'  } : 1;
-  $attr{ 'prompt'  } = ( exists $args{ 'prompt'  }  ) ? $args{ 'prompt'  } : 1;
-  $attr{ 'heading' } = ( exists $args{ 'heading' }  ) ? $args{ 'heading' } : 1;
+  $attr{ 'schema'  } = ( exists $args{ 'schema'  } ) ? $args{ 'schema'  } : 1;
+  $attr{ 'resize'  } = ( exists $args{ 'resize'  } ) ? $args{ 'resize'  } : 1;
+  $attr{ 'prompt'  } = ( exists $args{ 'prompt'  } ) ? $args{ 'prompt'  } : 1;
+  $attr{ 'grants'  } = ( exists $args{ 'grants'  } ) ? $args{ 'grants'  } : 0;
+  $attr{ 'heading' } = ( exists $args{ 'heading' } ) ? $args{ 'heading' } : 1;
+  $attr{ 'storage' } = ( exists $args{ 'storage' } ) ? $args{ 'storage' } : 1;
+  $attr{ 'tblspace'} = ( exists $args{ 'tblspace'} ) ? $args{ 'tblspace'} : 1;
 
   _set_sizing();
   _get_oracle_release();
@@ -492,15 +496,15 @@ sub _create_comments
 #
 #     TABLESPACE
 #     ROLLBACK SEGMENT
-#     PUBLIC DATABASE LINK (syntax doesn't permit schema; omit private links)
-#     SYNONYM
+#     PUBLIC DATABASE LINK
+#     PUBLIC SYNONYM
 #     PROFILE
 #     ROLE
 #     USER
 #
 sub _create_components
 {
-  my ( undef, undef, undef, $view ) = @_;
+  ( undef, undef, undef, my $view ) = @_;
 
   die "\nYou must use the DBA views in order to CREATE COMPONENTS\n\n"
       unless $view eq 'DBA';
@@ -552,7 +556,7 @@ sub _create_components
     $sql .= _create_rollback_segment( undef, undef, @$row->[0], $view );
   }
 
-  # Get database links
+  # Get PUBLIC database links
   $stmt =
       "
        SELECT
@@ -575,7 +579,7 @@ sub _create_components
     $sql .= _create_db_link( 'PUBLIC ', 'PUBLIC', @$row->[0], $view );
   }
 
-  # Get synonyms
+  # Get PUBLIC synonyms
   $stmt =
       "
        SELECT
@@ -583,6 +587,8 @@ sub _create_components
             , synonym_name
        FROM
               dba_synonyms
+       WHERE
+              owner = 'PUBLIC'
        ORDER
           BY
               owner
@@ -793,7 +799,7 @@ sub _create_constraint
     $sth->execute( $r_cons_name, $r_owner );
     my ( $table_name ) = $sth->fetchrow_array;
 
-    $sql .= "REFERENCES \L$schema$table_name\n" .
+    $sql .= "REFERENCES \L$r_owner\.$table_name\n" .
             _constraint_columns( $r_owner, $r_cons_name, $view );
 
     if ( $delete_rule eq 'CASCADE' )
@@ -1158,7 +1164,16 @@ sub _create_exchange_table
 #
 sub _create_function
 {
-  return _display_source( @_, 'FUNCTION' );
+  my ( $schema, $owner, $name, $view ) = @_;
+
+  my $sql =  _display_source( $schema, $owner, $name, $view, 'FUNCTION' );
+
+  if ( $attr{ 'grants' } )
+  {
+    $sql .= _object_privs( $schema, $owner, $name, $view );
+  }
+
+  return $sql ;
 }
 
 # sub _create_index
@@ -1537,7 +1552,25 @@ sub _create_iot
 {
   my ( $schema, $owner, $name, $view ) = @_;
 
-  my $stmt =
+  my $stmt;
+
+  if ( $oracle_major == 8 and $oracle_minor == 0 )
+  {
+    $stmt =
+      "
+       SELECT
+              'N/A'                         AS monitoring
+            , logging
+            , blocks - NVL(empty_blocks,0)
+       FROM
+              ${view}_all_tables
+       WHERE
+                  table_name = UPPER( ? )
+      ";
+  }
+  else
+  {
+    $stmt =
       "
        SELECT
               DECODE(
@@ -1552,6 +1585,7 @@ sub _create_iot
        WHERE
                   table_name = UPPER( ? )
       ";
+  }
 
   if ( $view eq 'DBA' )
   {
@@ -1569,7 +1603,71 @@ sub _create_iot
        $blocks,
      ) = $sth->fetchrow_array;
 
-  $stmt =
+  if ( $oracle_major == 8 and $oracle_minor == 0 )
+  {
+    $stmt =
+      "
+       SELECT
+              -- Table Properties
+              'N/A'                         AS monitoring
+            , 'N/A'                         AS table_name
+              -- Parallel Clause
+            , LTRIM(degree)
+            , LTRIM(instances)
+              -- Physical Properties
+            , 'INDEX'                       AS organization
+              -- Segment Attributes
+            , 'N/A'                         AS cache
+            , 'N/A'                         AS pct_used
+            , pct_free
+            , DECODE(
+                      ini_trans
+                     ,0,1
+                     ,null,1
+                     ,ini_trans
+                    )                       AS ini_trans
+            , DECODE(
+                      max_trans
+                     ,0,255
+                     ,null,255
+                     ,max_trans
+                    )                       AS max_trans
+              -- Storage Clause
+            , initial_extent
+            , next_extent
+            , min_extents
+            , DECODE(
+                      max_extents
+                     ,2147483645,'unlimited'
+                     ,           max_extents
+                    )                       AS max_extents
+            , pct_increase
+            , NVL(freelists,1)
+            , NVL(freelist_groups,1)
+            , LOWER(buffer_pool)          AS buffer_pool
+            , DECODE(
+                      '$logging'
+                     ,'NO','NOLOGGING'
+                     ,     'LOGGING'
+                    )                       AS logging
+            , LOWER(tablespace_name)      AS tablespace_name
+            , DECODE(
+                      '$blocks'
+                      ,null,GREATEST(initial_extent,next_extent) 
+                            / ($block_size * 1024)
+                      ,'0' ,GREATEST(initial_extent,next_extent)
+                            / ($block_size * 1024)
+                      ,'$blocks'
+                    )                       AS blocks
+       FROM
+              ${view}_indexes
+       WHERE
+                  table_name  = UPPER('$name')
+      ";
+  }
+  else
+  {
+    $stmt =
       "
        SELECT
               -- Table Properties
@@ -1632,6 +1730,7 @@ sub _create_iot
        WHERE
                   table_name  = UPPER('$name')
       ";
+  }
 
   if ( $view eq 'DBA' )
   {
@@ -1641,9 +1740,16 @@ sub _create_iot
       ";
   }
 
-  return _create_table_text( $stmt, $schema, $owner, $name, $view ) .
-         "; \n\n" .
-         _create_comments( $schema, $owner, $name, $view );
+  my $sql = _create_table_text( $stmt, $schema, $owner, $name, $view ) .
+            "; \n\n" .
+            _create_comments( $schema, $owner, $name, $view );
+
+  if ( $attr{ 'grants' } )
+  {
+    $sql .= _object_privs( $schema, $owner, $name, $view );
+  }
+
+  return $sql;
 }
 
 # sub _create_materialized_view
@@ -1660,7 +1766,7 @@ sub _create_materialized_view
 # sub _create_materialized_view_log
 #
 # Returns DDL to create the named materialized view log
-# by calling _create_mview (which is shared with
+# by calling _create_mview_log (which is shared with
 # _create_snapshot_log)
 #
 sub _create_materialized_view_log
@@ -1681,7 +1787,92 @@ sub _create_mview
   my ( $schema, $owner, $name, $view, $type ) = @_;
 
   my $sql;
-  my $stmt =
+  my $stmt;
+
+  if ( $oracle_major == 7 )
+  {
+    $stmt =
+      "
+       SELECT
+              table_name
+            , null                                     AS build_mode
+            , null                                     AS refresh_method
+            ,DECODE(
+                     type
+                    ,null,null
+                    ,'REFRESH ' || type || CHR(10)
+                   )                                   AS refresh_mode
+            , TO_CHAR(start_with, 'DD-MON-YYYY HH24:MI:SS')
+                                                       AS start_with
+            , next
+            , null                                     AS using_pk
+            , null                                     AS master_rollback_seg
+            , DECODE(
+                      updatable
+                     ,'TRUE','FOR UPDATE'
+                     ,null
+                    )                                  AS updatable
+            , query
+       FROM
+             ${view}_snapshots
+       WHERE
+                  name  = UPPER( ? )
+      ";
+
+    if ( $view eq 'DBA' )
+    {
+      $stmt .=
+        "
+              AND owner = UPPER('$owner')
+        "
+    }
+  }
+  elsif ( $oracle_major == 8 and $oracle_minor == 0 )
+  {
+    $stmt =
+      "
+       SELECT
+              table_name
+            , null                                     AS build_mode
+            , null                                     AS refresh_method
+            ,DECODE(
+                     type
+                    ,null,null
+                    ,'REFRESH ' || type || CHR(10)
+                   )                                   AS refresh_mode
+            , TO_CHAR(start_with, 'DD-MON-YYYY HH24:MI:SS')
+                                                       AS start_with
+            , next
+            , DECODE(
+                      refresh_method
+                     ,'PRIMARY KEY','WITH  PRIMARY KEY'
+                     ,'ROWID'      ,'WITH  ROWID'
+                     ,null
+                    )                                  AS using_pk
+            , master_rollback_seg
+            , DECODE(
+                      updatable
+                     ,'YES','FOR UPDATE'
+                     ,null
+                    )                                  AS updatable
+            , query
+       FROM
+             ${view}_snapshots
+       WHERE
+                  name  = UPPER( ? )
+      ";
+
+    if ( $view eq 'DBA' )
+    {
+      $stmt .=
+        "
+              AND owner = UPPER('$owner')
+        "
+    }
+  }
+  else
+  {
+    $stmt =
       "
        SELECT
               m.container_name
@@ -1693,7 +1884,7 @@ sub _create_mview
                              ,null,'BUILD DEFERRED'
                              ,'BUILD IMMEDIATE'
                             )
-                    )                                  AS build_mode
+                    ) || CHR(10)                       AS build_mode
             , DECODE(
                       m.refresh_method
                      ,'NEVER','NEVER REFRESH'
@@ -1701,8 +1892,8 @@ sub _create_mview
                     )                                  AS refresh_method
             , DECODE(
                       m.refresh_mode
-                     ,'NEVER',null
-                     ,'ON ' || m.refresh_mode
+                     ,'NEVER',CHR(10)
+                     ,'ON ' || m.refresh_mode || CHR(10)
                     )                                  AS refresh_mode
             , TO_CHAR(s.start_with, 'DD-MON-YYYY HH24:MI:SS')
                                                        AS start_with
@@ -1732,13 +1923,14 @@ sub _create_mview
               AND s.name        = m.mview_name
       ";
 
-  if ( $view eq 'DBA' )
-  {
-    $stmt .=
+    if ( $view eq 'DBA' )
+    {
+      $stmt .=
         "
               AND m.owner       = UPPER('$owner')
               AND s.owner       = m.owner
         "
+    }
   }
 
   $dbh->{ LongReadLen } = 65536;    # Allows Query to be 64K
@@ -1790,34 +1982,41 @@ sub _create_mview
           "CREATE $type \L$schema$name\n\n" .
           "CREATE $type \L$schema$name  \n" .
           _create_mview_table( $owner, $owner, $table, $view ) .
-          "$build_mode\n" .
+          "$build_mode" .
           "USING INDEX\n" .
-          _create_mview_index( $schema, $owner, $index, $view ) .
-          "$refresh_method $refresh_mode\n";
+          _create_mview_index( $schema, $owner, $index, $view );
+
+  $sql .= "$refresh_method "    if $refresh_method;
+
+  $sql .= $refresh_mode;
 
   if ( $refresh_method ne 'NEVER REFRESH' )
   {
     $sql .= "START WITH TO_DATE('$start_with','DD-MON-YYYY HH24:MI:SS')\n"
       if $start_with;
 
-    $sql .= "NEXT  $next\n"
-      if $next;
+    $sql .= "NEXT  $next\n"    if $next;
 
-    $sql .= "$using_pk\n"
-      if $using_pk;
+    $sql .= "$using_pk\n"      if $using_pk;
 
     $sql .= "USING MASTER ROLLBACK SEGMENT \L$master_rb_seg\n"
       if $master_rb_seg;
   }
 
-  $sql .= "$updatable\n"
-    if $updatable;
+  $sql .= "$updatable\n"     if $updatable;
 
-  $sql .= "AS\n" .
-          $query;
+  $sql .= "AS\n" . $query;
 
-  return $sql .
-         ";\n\n";
+  $sql =~ s/\n+\Z//;
+
+  $sql .= " ;\n\n";
+
+  if ( $attr{ 'grants' } )
+  {
+    $sql .= _object_privs( $schema, $owner, $name, $view );
+  }
+
+  return $sql;
 }
 
 # sub _create_mview_index
@@ -1999,6 +2198,7 @@ sub _create_mview_log
 sub _create_mview_table
 {
   # Snapshots and their logs don't use attribute INITRANS.
+  # Prior to 8i, they don't use FREELISTS and FREELIST GROUPS, either.
   # This will prevent sub _segment_attributes from including it.
   $isasnaptabl = 1;
 
@@ -2045,9 +2245,16 @@ sub _create_mview_table
 #
 sub _create_package
 {
-  my $sql  = _display_source( @_, 'PACKAGE' );
+  my ( $schema, $owner, $name, $view ) = @_;
 
-  return $sql;
+  my $sql =  _display_source( $schema, $owner, $name, $view, 'PACKAGE' );
+
+  if ( $attr{ 'grants' } )
+  {
+    $sql .= _object_privs( $schema, $owner, $name, $view );
+  }
+
+  return $sql ;
 }
 
 # sub _create_package_body
@@ -2062,9 +2269,7 @@ sub _create_package
 #
 sub _create_package_body
 {
-  my $sql  = _display_source( @_, 'PACKAGE BODY' );
-
-  return $sql;
+  return _display_source( @_, 'PACKAGE BODY' );
 }
 
 # sub _create_partitioned_index
@@ -2170,13 +2375,15 @@ sub _create_partitioned_index
                       )                     AS blocks
        FROM
               ${view}_part_indexes  i
+            , ${view}_indexes       n
             , ${view}_tablespaces   s
             , ${view}_part_tables   t
        WHERE
                   -- def_tablspace is sometimes NULL in PART_INDEXES,
                   -- we'll have to go over to the table for the defaults
                   i.index_name      = UPPER( ? )
-              AND t.table_name      = i.table_name
+              AND n.index_name      = UPPER( ? )
+              AND t.table_name      = n.table_name
               AND s.tablespace_name = t.def_tablespace_name
       ";
   }
@@ -2531,24 +2738,24 @@ sub _create_partitioned_iot
       ";
   }
 
-  my $sql = _create_table_text( $stmt, $schema, $owner, $name, $view ) .
-            _create_comments( $schema, $owner, $name, $view );
+  my $sql = _create_table_text( $stmt, $schema, $owner, $name, $view );
 
   $stmt =
       "
        SELECT
-              index_name
+              constraint_name
        FROM
-              ${view}_part_indexes
+              ${view}_constraints
        WHERE
-                  table_name = UPPER( ? )
+                  table_name      = UPPER( ? )
+              AND constraint_type = 'P'
       ";
 
   if ( $view eq 'DBA' )
   {
     $stmt .=
       "
-              AND owner      = UPPER('$owner')
+              AND owner           = UPPER('$owner')
       ";
   }
 
@@ -2560,7 +2767,13 @@ sub _create_partitioned_iot
           "(\n    " .
           _partition_key_columns( $owner, $name, 'TABLE', $view ) .
           "\n)\n" .
-          _range_partitions( $owner, $index, $view, 'NONE', 'IOT' );
+          _range_partitions( $owner, $index, $view, 'NONE', 'IOT' ) .
+          _create_comments( $schema, $owner, $name, $view );
+
+  if ( $attr{ 'grants' } )
+  {
+    $sql .= _object_privs( $schema, $owner, $name, $view );
+  }
 
   return $sql;
 }
@@ -3042,7 +3255,14 @@ sub _create_partitioned_table
     $sql .= "\n) ;\n\n";
   }
 
-  return $sql . _create_comments( $schema, $owner, $name, $view );
+  $sql .= _create_comments( $schema, $owner, $name, $view );
+
+  if ( $attr{ 'grants' } )
+  {
+    $sql .= _object_privs( $schema, $owner, $name, $view );
+  }
+
+  return $sql ;
 }
 
 # sub _create_procedure
@@ -3057,7 +3277,16 @@ sub _create_partitioned_table
 #
 sub _create_procedure
 {
-  return _display_source( @_, 'PROCEDURE' );
+  my ( $schema, $owner, $name, $view ) = @_;
+
+  my $sql =  _display_source( $schema, $owner, $name, $view, 'PROCEDURE' );
+
+  if ( $attr{ 'grants' } )
+  {
+    $sql .= _object_privs( $schema, $owner, $name, $view );
+  }
+
+  return $sql ;
 }
 
 # sub _create_profile
@@ -3094,7 +3323,12 @@ sub _create_profile
               profile = UPPER( ? )
        ORDER
           BY
-              resource_type
+              DECODE(
+                      SUBSTR(resource_name,1,8)
+                     ,'FAILED_L',2
+                     ,'PASSWORD',2
+                     ,1
+                    )
             , resource_name
       ");
 
@@ -3237,6 +3471,797 @@ sub _create_rollback_segment
          ";\n\n" ; 
 }
 
+# sub _create_schema
+#
+# Returns DDL to create all objects of the following type:
+#
+#     TYPE
+#     TABLE
+#     INDEX
+#     CONSTRAINT
+#     TRIGGER
+#     VIEW
+#     SNAPSHOT
+#     SNAPSHOT LOG
+#     SYNONYM
+#     DATABASE LINK
+#     FUNCTION
+#     PROCEDURE
+#     PACKAGE
+#     PACKAGE BODY
+#     SEQUENCE
+# 
+sub _create_schema
+{
+  my ( $schema, $owner, $name, $view ) = @_;
+
+  my $sql;
+  my $aref;
+  my $stmt;
+
+  #
+  # Start with schema's types (they may be a data type in CREATE TABLE)
+  #
+  $stmt =
+      "
+       SELECT
+              object_name
+       FROM
+              ${view}_objects
+       WHERE
+                  object_type = 'TYPE'
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+              AND owner       = UPPER('$owner')
+      ";
+  }
+
+  $stmt .= 
+      "
+       ORDER
+          BY
+              object_name
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    $sql .= _create_type( $schema, $owner, @$row->[0], $view );
+  }
+
+  #
+  # Add schema's tables
+  #
+  $stmt =
+      "
+       SELECT
+              table_name
+       FROM
+              ${view}_tables
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+       WHERE
+              owner = UPPER('$owner')
+      ";
+  }
+
+  if ( $oracle_major > 7 )
+  {
+    $stmt .=
+      "
+       MINUS
+       SELECT
+              table_name
+       FROM
+              ${view}_tables
+       WHERE
+                  iot_type = 'IOT_OVERFLOW'
+      ";
+
+    if ( $view eq 'DBA' )
+    {
+      $stmt .=
+        "
+              AND owner    = UPPER('$owner')
+        ";
+    }
+  }
+
+  $stmt .=
+      "
+       MINUS
+       SELECT
+              log_table
+       FROM
+              ${view}_snapshot_logs
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+       WHERE  log_owner  = UPPER('$owner')
+      ";
+  }
+
+  $stmt .=
+      "
+       MINUS
+       SELECT
+              table_name
+       FROM
+              ${view}_snapshots
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+       WHERE
+              owner = UPPER('$owner')
+      ";
+  }
+
+  $stmt .= 
+      "
+       ORDER
+          BY
+              1
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    $sql .= _create_table( $schema, $owner, @$row->[0], $view );
+  }
+
+  #
+  # Add schema's indexes
+  #
+
+  # If we're an IOT (Oracle8 or newer), skip the PK index
+  # because it was in the CREATE TABLE
+
+  if ( $oracle_major == 7 )
+  {
+    $stmt =
+      "
+       SELECT
+              index_name
+       FROM
+              ${view}_indexes  i
+      ";
+
+    if ( $view eq 'DBA' )
+    {
+      $stmt .=
+      "
+       WHERE
+              i.table_owner = UPPER('$owner')
+      ";
+    }
+  }
+  else   # we're Oracle8 or newer
+  {
+  $stmt =
+      "
+       SELECT
+              index_name
+       FROM
+              ${view}_indexes  i
+            , ${view}_tables   t
+       WHERE
+                  i.table_owner = UPPER('$owner')
+              AND t.table_name  = i.table_name
+              AND (
+                       t.iot_type <> 'IOT'
+                    OR (
+                         NOT EXISTS (
+                                      SELECT
+                                             null
+                                      FROM
+                                             ${view}_constraints
+                                      WHERE
+                                                 constraint_type = 'P'
+                                             AND constraint_name =
+                                                 i.index_name
+                                             AND owner           =
+                                                 i.table_owner
+                                    )
+                       )
+                  )
+      ";
+
+    if ( $view eq 'DBA' )
+    {
+      $stmt .=
+      "
+              AND t.owner       = i.table_owner
+      ";
+    }
+  }
+
+  $stmt .= 
+      "
+       ORDER
+          BY
+              i.table_name
+            , i.index_name
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    $sql .= _create_index( $schema, $owner, @$row->[0], $view );
+  }
+
+  #
+  # Add schema's constraints
+  #
+
+  # If we're an IOT (Oracle8 or newer), skip the PK constraint
+  # because it was in the CREATE TABLE
+
+  if ( $oracle_major == 7 )
+  {
+    $stmt =
+      "
+       SELECT
+              c.constraint_name
+            , c.constraint_type
+            , c.search_condition
+       FROM
+              ${view}_constraints  c
+       WHERE
+                  constraint_type IN('P','U','R','C')
+      ";
+
+    if ( $view eq 'DBA' )
+    {
+      $stmt .=
+      "
+              AND c.owner = UPPER('$owner')
+      ";
+    }
+  }
+  else   # we're Oracle8 or newer
+  {
+    $stmt =
+      "
+       SELECT
+              c.constraint_name
+            , c.constraint_type
+            , c.search_condition
+       FROM
+              ${view}_constraints  c
+            , ${view}_tables       t
+       WHERE
+                  t.table_name = c.table_name
+              AND (
+                       (
+                             (
+                                  t.iot_type <> 'IOT'
+                               OR t.iot_type IS NULL
+                             )
+                         AND c.constraint_type IN('P','U','R','C')
+                       )
+                    OR (
+                             t.iot_type         = 'IOT'
+                         AND c.constraint_type IN ('U','R','C')
+                       )
+                  )
+              AND NOT EXISTS (
+                               SELECT
+                                      null
+                               FROM
+                                      ${view}_snapshot_logs
+                               WHERE
+                                          log_table = c.table_name
+      ";
+
+    if ( $view eq 'DBA' )
+    {
+      $stmt .=
+      "
+                                      AND log_owner = c.owner
+      ";
+    }
+
+    $stmt .=
+      "
+                             )
+              AND NOT EXISTS (
+                               SELECT
+                                      null
+                               FROM
+                                      ${view}_snapshots
+                               WHERE
+                                          table_name = c.table_name
+      ";
+
+    if ( $view eq 'DBA' )
+    {
+      $stmt .=
+      "
+                                      AND owner      = c.owner
+      ";
+    }
+
+    $stmt .=
+      "
+                             )
+      ";
+
+    if ( $view eq 'DBA' )
+    {
+      $stmt .=
+      "
+              AND c.owner      = UPPER('$owner')
+              AND t.owner      = c.owner
+      ";
+    }
+  }
+
+  $stmt .=
+      "
+       ORDER
+          BY
+              DECODE(
+                      c.constraint_type
+                     ,'P',1
+                     ,'U',2
+                     ,'R',3
+                     ,'C',4
+                    )
+            , c.table_name
+            , c.constraint_name
+      ";
+
+  $dbh->{ LongReadLen } = 8192;    # Allows SEARCH_CONDITION length of 8K
+  $dbh->{ LongTruncOk } = 1;
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    my ( $cons_name, $cons_type, $condition ) = @$row;
+
+    if ( $cons_type ne 'C' )
+    {
+      $sql .= _create_constraint( $schema, $owner, $cons_name, $view );
+    }
+    elsif ( $condition !~ /IS NOT NULL/ )
+    {
+      $sql .= _create_constraint( $schema, $owner, $cons_name, $view );
+    }
+  }
+
+  #
+  # Add schema's triggers
+  #
+  $stmt =
+      "
+       SELECT
+              trigger_name
+       FROM
+              ${view}_triggers
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+       WHERE
+              table_owner = UPPER('$owner')
+      ";
+  }
+
+  $stmt .= 
+      "
+       ORDER
+          BY
+              table_name
+            , trigger_name
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    $sql .= _create_trigger( $schema, $owner, @$row->[0], $view );
+  }
+
+  #
+  # Add schema's views
+  #
+  $stmt =
+      "
+       SELECT
+              view_name
+       FROM
+              ${view}_views
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+       WHERE
+              owner = UPPER('$owner')
+      ";
+  }
+
+  $stmt .= 
+      "
+       ORDER
+          BY
+              view_name
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    $sql .= _create_view( $schema, $owner, @$row->[0], $view );
+  }
+
+  #
+  # Add schema's snapshot logs
+  #
+  $stmt =
+      "
+       SELECT
+              master
+       FROM
+              ${view}_snapshot_logs
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+       WHERE  log_owner  = UPPER('$owner')
+      ";
+  }
+
+  $stmt .= 
+      "
+       ORDER
+          BY
+              master
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    $sql .= _create_snapshot_log( $schema, $owner, @$row->[0], $view );
+  }
+
+  #
+  # Add schema's snapshots
+  #
+  $stmt =
+      "
+       SELECT
+              name
+       FROM
+              ${view}_snapshots
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+       WHERE
+              owner = UPPER('$owner')
+      ";
+  }
+
+  $stmt .= 
+      "
+       ORDER
+          BY
+              name
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    $sql .= _create_snapshot( $schema, $owner, @$row->[0], $view );
+  }
+
+  #
+  # Add schema's synonyms
+  #
+  $stmt =
+      "
+       SELECT
+              synonym_name
+       FROM
+              ${view}_synonyms
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+       WHERE
+              owner = UPPER('$owner')
+      ";
+  }
+
+  $stmt .= 
+      "
+       ORDER
+          BY
+              synonym_name
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    $sql .= _create_synonym( $schema, $owner, @$row->[0], $view );
+  }
+
+  #
+  # Add schema's database links
+  #
+  $stmt =
+      "
+       SELECT
+              db_link
+       FROM
+              ${view}_db_links
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+       WHERE
+              owner = UPPER('$owner')
+      ";
+  }
+
+  $stmt .= 
+      "
+       ORDER
+          BY
+              db_link
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    $sql .= _create_db_link( $schema, $owner, @$row->[0], $view );
+  }
+
+  #
+  # Add schema's functions
+  #
+  $stmt =
+      "
+       SELECT
+              object_name
+       FROM
+              ${view}_objects
+       WHERE
+                  object_type = 'FUNCTION'
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+              AND owner       = UPPER('$owner')
+      ";
+  }
+
+  $stmt .= 
+      "
+       ORDER
+          BY
+              object_name
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    $sql .= _create_function( $schema, $owner, @$row->[0], $view );
+  }
+
+  #
+  # Add schema's procedures
+  #
+  $stmt =
+      "
+       SELECT
+              object_name
+       FROM
+              ${view}_objects
+       WHERE
+                  object_type = 'PROCEDURE'
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+              AND owner       = UPPER('$owner')
+      ";
+  }
+
+  $stmt .= 
+      "
+       ORDER
+          BY
+              object_name
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    $sql .= _create_procedure( $schema, $owner, @$row->[0], $view );
+  }
+
+  #
+  # Add schema's packages
+  #
+  $stmt =
+      "
+       SELECT
+              object_name
+       FROM
+              ${view}_objects
+       WHERE
+                  object_type = 'PACKAGE'
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+              AND owner       = UPPER('$owner')
+      ";
+  }
+
+  $stmt .= 
+      "
+       ORDER
+          BY
+              object_name
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    $sql .= _create_package( $schema, $owner, @$row->[0], $view );
+  }
+
+  #
+  # Add schema's package bodies
+  #
+  $stmt =
+      "
+       SELECT
+              object_name
+       FROM
+              ${view}_objects
+       WHERE
+                  object_type = 'PACKAGE BODY'
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+              AND owner       = UPPER('$owner')
+      ";
+  }
+
+  $stmt .= 
+      "
+       ORDER
+          BY
+              object_name
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    $sql .= _create_package_body( $schema, $owner, @$row->[0], $view );
+  }
+
+  #
+  # Add schema's sequences
+  #
+  $stmt =
+      "
+       SELECT
+              sequence_name
+       FROM
+              ${view}_sequences
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+       WHERE
+              sequence_owner = UPPER('$owner')
+      ";
+  }
+
+  $stmt .= 
+      "
+       ORDER
+          BY
+              sequence_name
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute;
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    $sql .= _create_sequence( $schema, $owner, @$row->[0], $view );
+  }
+
+  $sql .= "PROMPT Recompile schema \U$owner\n\n" .
+          "BEGIN dbms_utility.compile_schema('\U$owner') ; END ;\n/\n\n"
+      unless $schema eq 'PUBLIC';
+
+  return $sql;
+}
+
 # sub _create_sequence
 #
 # Returns DDL to create the named sequence in the form of:
@@ -3315,17 +4340,24 @@ sub _create_sequence
        $order_flag,
      ) = @row;
 
-  return "PROMPT " .
-         "CREATE SEQUENCE \L$schema$name\n\n" .
-         "CREATE SEQUENCE \L$schema$name\n" .
-         "   $start_with\n" .
-         "   $increment_by\n" .
-         "   $min_value\n" .
-         "   $max_value\n" .
-         "   $cache_size\n" .
-         "   $cycle_flag\n" .
-         "   $order_flag\n" .
-         ";\n\n";
+  my $sql = "PROMPT " .
+            "CREATE SEQUENCE \L$schema$name\n\n" .
+            "CREATE SEQUENCE \L$schema$name\n" .
+            "   $start_with\n" .
+            "   $increment_by\n" .
+            "   $min_value\n" .
+            "   $max_value\n" .
+            "   $cache_size\n" .
+            "   $cycle_flag\n" .
+            "   $order_flag\n" .
+            ";\n\n";
+
+  if ( $attr{ 'grants' } )
+  {
+    $sql .= _object_privs( $schema, $owner, $name, $view );
+  }
+
+  return $sql;
 }
 
 # sub _create_snapshot
@@ -3387,16 +4419,23 @@ sub _create_synonym
 
   my ( $table_owner, $table_name, $db_link ) = @row;
 
-  $db_link      = ( $db_link     eq 'NULL' )   ? ''        : "\@$db_link";
-  $schema       = ( $schema      eq 'PUBLIC' ) ? ''        : $schema;
-  my $is_public = ( "\U$owner"   eq 'PUBLIC' ) ? ' PUBLIC' : '';
+  $db_link      = ( $db_link   eq 'NULL' )   ? ''        : "\@$db_link";
+  $schema       = ( $schema    eq 'PUBLIC' ) ? ''        : $schema;
+  my $is_public = ( "\U$owner" eq 'PUBLIC' ) ? ' PUBLIC' : '';
   my $table_schema = _set_schema( $table_owner );
 
-  return "PROMPT " .
-         "CREATE$is_public SYNONYM \L$schema$name " .
-            "FOR \L$table_schema$table_name$db_link \n\n" .
-         "CREATE$is_public SYNONYM \L$schema$name " .
-            "FOR \L$table_schema$table_name$db_link;\n\n";
+  my $sql = "PROMPT " .
+            "CREATE$is_public SYNONYM \L$schema$name " .
+               "FOR \L$table_schema$table_name$db_link \n\n" .
+            "CREATE$is_public SYNONYM \L$schema$name " .
+               "FOR \L$table_schema$table_name$db_link;\n\n";
+
+  if ( $attr{ 'grants' } )
+  {
+    $sql .= _object_privs( $schema, $table_owner, $table_name, $view );
+  }
+
+  return $sql;
 }
 
 # sub _create_table
@@ -3696,9 +4735,16 @@ sub _create_table
       ";
   }
 
-  return _create_table_text( $stmt, $schema, $owner, $name, $view ) .
+  $sql = _create_table_text( $stmt, $schema, $owner, $name, $view ) .
          ";\n\n" .
          _create_comments( $schema, $owner, $name, $view );
+
+  if ( $attr{ 'grants' } )
+  {
+    $sql .= _object_privs( $schema, $owner, $name, $view );
+  }
+
+  return $sql;
 }
 
 # sub _create_table_family
@@ -3710,32 +4756,94 @@ sub _create_table_family
 {
   my ( $schema, $owner, $name, $view ) = @_;
 
-  my $sql = _create_table     ( @_ );
+  my $stmt;
+  my $sql = _create_table( @_ );
 
   # Add table's indexes
-  my $stmt =
+  if ( $oracle_major == 7 )
+  {
+    $stmt =
+      "
+       SELECT
+              'NOT IOT'               AS iot_type
+       FROM
+              ${view}_tables
+       WHERE
+                  table_name = UPPER( ? )
+      ";
+  }
+  else
+  {
+    $stmt =
+      "
+       SELECT
+              iot_type
+       FROM
+              ${view}_tables
+       WHERE
+                  table_name = UPPER( ? )
+      ";
+  }
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+        "
+              AND owner      = UPPER('$owner')
+        ";
+  }
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute( $name );
+  my ( $iot ) = $sth->fetchrow_array;
+
+  $stmt =
       "
        SELECT
               index_name
        FROM
               ${view}_indexes
        WHERE
-                  table_name = UPPER( ? )
+                  table_name  = UPPER( ? )
       ";
 
   if ( $view eq 'DBA' )
   {
     $stmt .=
       "
-              AND owner        = UPPER('$owner')
+              AND table_owner = UPPER('$owner')
       ";
+  }
+
+  if ( $iot eq 'IOT' )
+  {
+    # Omit the PK, it's in the CREATE TABLE on an IOT
+    $stmt .=
+      "
+       MINUS
+       SELECT
+              constraint_name
+       FROM
+              ${view}_constraints
+       WHERE
+                  table_name      = UPPER( '$name' )
+              AND constraint_type = 'P'
+      ";
+
+    if ( $view eq 'DBA' )
+    {
+      $stmt .=
+      "
+              AND owner           = UPPER('$owner')
+      ";
+    }
   }
 
   $stmt .= 
       "
        ORDER
           BY
-             index_name
+             1
       ";
 
   $sth = $dbh->prepare( $stmt );
@@ -3759,7 +4867,25 @@ sub _create_table_family
        WHERE
                   owner            = UPPER( ? )
               AND table_name       = UPPER( ? )
+      ";
+
+  if ( $iot eq 'IOT' )
+  {
+    $stmt .=
+      "
+              AND constraint_type IN('U','R','C')
+      ";
+  }
+  else
+  {
+    $stmt .=
+      "
               AND constraint_type IN('P','U','R','C')
+      ";
+  }
+
+  $stmt .= 
+      "
        ORDER
           BY
              DECODE(
@@ -3802,14 +4928,14 @@ sub _create_table_family
        FROM
               ${view}_triggers
        WHERE
-                  table_name = UPPER( ? )
+                  table_name  = UPPER( ? )
       ";
 
   if ( $view eq 'DBA' )
   {
     $stmt .=
       "
-              AND owner        = UPPER('$owner')
+              AND table_owner = UPPER('$owner')
       ";
   }
 
@@ -3915,23 +5041,172 @@ sub _create_table_text
 
   $sql .= "ORGANIZATION        $organization\n"    if $oracle_major > 7;
 
-    if (
-            $oracle_major > 8
-         or ( $oracle_major == 8 and $oracle_minor > 0 )
-       )
-    {
-      $sql .= "$monitoring\n";
-    }
+  if (
+          $oracle_major > 8
+       or ( $oracle_major == 8 and $oracle_minor > 0 )
+     )
+  {
+    $sql .= "$monitoring\n";
+  }
 
-  $sql .= "PARALLEL\n" .
-          "(\n" .
-          "  DEGREE            $degree\n" .
-          "  INSTANCES         $instances\n" .
-          ")\n";
+  unless (     $organization eq 'INDEX'
+           and $oracle_major == 8
+           and $oracle_minor == 0
+         )
+  {
+    $sql .= "PARALLEL\n" .
+            "(\n" .
+            "  DEGREE            $degree\n" .
+            "  INSTANCES         $instances\n" .
+            ")\n";
+  }
 
   unshift @row, ( '', $organization );
 
   $sql .= _segment_attributes( \@row );
+
+  if ( $organization eq 'INDEX' )
+  {
+    if ( $oracle_major == 8 and $oracle_minor == 0 )
+    {
+      $stmt =
+        "
+         SELECT
+                c.column_name
+              , i.pct_threshold
+              , 'HEAP'                        AS organization
+                -- Segment Attributes
+              , 'N/A'                         AS cache
+              , t.pct_used
+              , t.pct_free
+              , DECODE(
+                        t.ini_trans
+                       ,0,1
+                       ,null,1
+                       ,t.ini_trans
+                      )                       AS ini_trans
+              , DECODE(
+                        t.max_trans
+                       ,0,255
+                       ,null,255
+                       ,t.max_trans
+                      )                       AS max_trans
+                -- Storage Clause
+              , t.initial_extent
+              , t.next_extent
+              , t.min_extents
+              , DECODE(
+                        t.max_extents
+                       ,2147483645,'unlimited'
+                       ,           t.max_extents
+                      )                       AS max_extents
+              , NVL(t.pct_increase,0)
+              , NVL(t.freelists,1)
+              , NVL(t.freelist_groups,1)
+              , 'N/A'                         AS buffer_pool
+              , DECODE(
+                        t.logging
+                       ,'NO','NOLOGGING'
+                       ,     'LOGGING'
+                      )                       AS logging
+              , LOWER(t.tablespace_name)      AS tablespace_name
+              , s.blocks - NVL(t.empty_blocks,0)
+         FROM
+                ${view}_tables       t
+              , ${view}_indexes      i
+              , ${view}_segments     s
+              , ${view}_tab_columns  c
+         WHERE
+                    t.iot_name       = UPPER('$name')
+                AND i.table_name     = t.iot_name
+                AND c.table_name (+) = i.table_name
+                AND c.column_id  (+) = i.include_column
+                AND s.segment_name   = t.table_name
+        ";
+    }
+    else                   # We're Oracle8i or newer
+    {
+      $stmt =
+        "
+         SELECT
+                c.column_name
+              , i.pct_threshold
+              , 'HEAP'                        AS organization
+                -- Segment Attributes
+              , 'N/A'                         AS cache
+              , t.pct_used
+              , t.pct_free
+              , DECODE(
+                        t.ini_trans
+                       ,0,1
+                       ,null,1
+                       ,t.ini_trans
+                      )                       AS ini_trans
+              , DECODE(
+                        t.max_trans
+                       ,0,255
+                       ,null,255
+                       ,t.max_trans
+                      )                       AS max_trans
+                -- Storage Clause
+              , t.initial_extent
+              , t.next_extent
+              , t.min_extents
+              , DECODE(
+                        t.max_extents
+                       ,2147483645,'unlimited'
+                       ,           t.max_extents
+                      )                       AS max_extents
+              , NVL(t.pct_increase,0)
+              , NVL(t.freelists,1)
+              , NVL(t.freelist_groups,1)
+              , LOWER(t.buffer_pool)          AS buffer_pool
+              , DECODE(
+                        t.logging
+                       ,'NO','NOLOGGING'
+                       ,     'LOGGING'
+                      )                       AS logging
+              , LOWER(t.tablespace_name)      AS tablespace_name
+              , s.blocks - NVL(t.empty_blocks,0)
+         FROM
+                ${view}_tables       t
+              , ${view}_indexes      i
+              , ${view}_segments     s
+              , ${view}_tab_columns  c
+         WHERE
+                    t.iot_name       = UPPER('$name')
+                AND i.table_name     = t.iot_name
+                AND c.table_name (+) = i.table_name
+                AND c.column_id  (+) = i.include_column
+                AND s.segment_name   = t.table_name
+        ";
+    }
+
+    if ( $view eq 'DBA' )
+    {
+      $stmt .=
+        "
+                AND t.owner          = UPPER('$owner')
+                AND s.owner          = t.owner
+                AND c.owner      (+) = i.table_owner
+                AND i.table_owner    = t.owner
+        ";
+    }
+
+    $sth = $dbh->prepare( $stmt );
+    $sth->execute;
+    my @row = $sth->fetchrow_array;
+
+    if ( @row )
+    {
+      my $column        = shift @row;
+      my $pct_threshold = shift @row;
+
+      $sql .= "PCTTHRESHOLD        $pct_threshold\n";
+      $sql .= "INCLUDING           $column\n"    if $column;
+      $sql .= "OVERFLOW\n";
+    }
+  }
 
   return $sql;
 }
@@ -4284,7 +5559,6 @@ sub _create_trigger
             , table_name
             , base_object_type
             , referencing_names
-            , description
             , DECODE(
                       when_clause
                      ,null,null
@@ -4309,7 +5583,6 @@ sub _create_trigger
               -- Only table triggers before 8i
             , 'TABLE'                           AS base_object_type
             , referencing_names
-            , description
             , DECODE(
                       when_clause
                      ,null,null
@@ -4327,7 +5600,7 @@ sub _create_trigger
   {
     $stmt .=
       "
-              AND owner        = UPPER('$owner')
+              AND table_owner  = UPPER('$owner')
       ";
   }
 
@@ -4346,13 +5619,11 @@ sub _create_trigger
        $table,
        $base_type,
        $ref_names,
-       $description,
        $when,
        $body,
      ) = @row;
 
   my ( $trg_type ) = $trigger_type =~ /(BEFORE|AFTER|INSTEAD OF)/;
-  my ( $columns )  = $description  =~ /$trg_type $event(.*) ON /i;
   my $schema2 = _set_schema( $table_owner );
   my $object = ( $base_type eq 'TABLE'  ) ? $schema2 . $table   :
                ( $base_type eq 'SCHEMA' ) ? $schema  . 'SCHEMA' : $base_type;
@@ -4364,10 +5635,41 @@ sub _create_trigger
   # Body sometimes ends in a null
   $body =~ s/\c@//g;
 
+  my $columns;
+  if ( $event =~ /UPDATE/ )
+  {
+    $stmt =
+      "
+       SELECT
+              LOWER(column_name)
+       FROM
+              ${view}_trigger_cols
+       WHERE
+                  trigger_name = UPPER( ? )
+              AND column_list  = 'YES'
+      ";
+
+    if ( $view eq 'DBA' )
+    {
+      $stmt .=
+      "
+              AND table_owner  = UPPER('$owner')
+      ";
+    }
+
+    $sth = $dbh->prepare( $stmt );
+    $sth->execute( $name );
+
+    my (@columns) = map { $_->[0] } @{ $sth->fetchall_arrayref };
+
+    $columns = "\nOF\n    " . join ("\n  , ", @columns) . "\n" if ( @columns );
+  }
+
+
   my $sql = "PROMPT " .
             "CREATE OR REPLACE TRIGGER \L$schema$name\n\n" .
             "CREATE OR REPLACE TRIGGER \L$schema$name\n" .
-            "$trg_type $event\U$columns ON \L$object\n";
+            "$trg_type $event ${columns}ON \L$object\n";
 
   $sql .= "$ref_names\n"      if $base_type =~ /TABLE|VIEW/;
   $sql .= "FOR EACH ROW\n"    if $trigger_type =~ /EACH ROW/;
@@ -4392,7 +5694,16 @@ sub _create_trigger
 #
 sub _create_type
 {
-  return _display_source( @_, 'TYPE' );
+  my ( $schema, $owner, $name, $view ) = @_;
+
+  my $sql = _display_source( $schema, $owner, $name, $view, 'TYPE' );
+
+  if ( $attr{ 'grants' } )
+  {
+    $sql .= _object_privs( $schema, $owner, $name, $view );
+  }
+
+  return $sql;
 }
 
 # sub _create_user
@@ -4406,9 +5717,9 @@ sub _create_type
 #        [QUOTA {UNLIMITED|<bytes>} ON TABLESPACE <tablespace1>]
 #        [QUOTA {UNLIMITED|<bytes>} ON TABLESPACE <tablespace2>]
 #
-#     [GRANT <role >            TO <name> {WITH ADMIN OPTION]]
-#     [GRANT <system privilege> TO <name> {WITH ADMIN OPTION]]
-#     [GRANT <privilege> ON <object> TO <name> {WITH GRANT OPTION]]
+#     [GRANT <role >            TO <name> [WITH ADMIN OPTION]]
+#     [GRANT <system privilege> TO <name> [WITH ADMIN OPTION]]
+#     [GRANT <privilege> ON <object> TO <name> [WITH GRANT OPTION]]
 # 
 sub _create_user
 {
@@ -4494,6 +5805,9 @@ sub _create_user
 # Returns DDL to create the named view in the form of:
 #
 #     CREATE OR REPLACE VIEW [schema.]<name>
+#     (
+#       <column aliases>
+#     )
 #     AS
 #     <query>
 # 
@@ -4527,9 +5841,41 @@ sub _create_view
   my ( $text ) = $sth->fetchrow_array;
   die "\nView \U$name \Ldoes not exist.\n\n" unless $text;
 
+  $stmt =
+      "
+       SELECT
+              LOWER(column_name)
+       FROM
+              ${view}_tab_columns
+       WHERE
+                  table_name = UPPER( ? )
+      ";
+ 
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+              AND owner      = UPPER('$owner')
+      ";
+  }
+ 
+  $stmt .= 
+      "
+       ORDER
+          BY
+              column_id
+      ";
+ 
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute( $name );
+  my (@columns) = map { $_->[0] } @{ $sth->fetchall_arrayref };
+
   return "PROMPT " .
          "CREATE OR REPLACE VIEW \L$schema$name\n\n" .
          "CREATE OR REPLACE VIEW \L$schema$name\n" .
+         "(\n    " .
+         join ("\n  , ", @columns) .
+         "\n)\n" .
          "AS\n" .
          "$text" .
          ";\n\n";
@@ -4556,15 +5902,15 @@ sub _display_source
        FROM
               ${view}_source
        WHERE
-                  type = '$type'
-              AND name = UPPER( ? )
+                  type  = '$type'
+              AND name  = UPPER( ? )
       ";
 
   if ( $view eq 'DBA' )
   {
     $stmt .=
       "
-              AND owner     = UPPER('$owner')
+              AND owner = UPPER('$owner')
       ";
   }
 
@@ -4592,7 +5938,15 @@ sub _display_source
       # source.text already includes <TYPE> <name> 
       # We want to insert the schema right before the name
 
-      @$row->[0] =~ s/$type\s+\S+/$type \L$schema$name/i;
+#      @$row->[0] =~ s/$type\s+\S+/$type \L$schema$name/i;
+#     The following line was submitted by Sandor Toth, to fix the condition
+#     where parameters immediately followed the name, as in
+#        CREATE OR REPLACE PROCEDURE foo( var1 IN VARCHAR2)
+#                                       ^
+#                                       |
+#                                observe, no space between 'foo' and '('
+
+      @$row->[0] =~ s/($type)\s+($name)\s*(.*)$/$1 \L$schema$2 $3/i;
     }
 
     $sql .= "@$row->[0]";
@@ -4764,7 +6118,7 @@ sub _drop_synonym
   {
       return "PROMPT " .
              "DROP SYNONYM  \L$schema$name  \n\n" .
-             "DROP SYNONYM  \L$schema$name  \n\n";
+             "DROP SYNONYM  \L$schema$name ;\n\n";
   }
 }
 
@@ -4844,14 +6198,27 @@ sub _generate_heading
     $ddl .= "REM Generating CREATE <component> statements\n\n";
     return;
   }
+  elsif ( "\U$type" eq 'SCHEMA' )
+  {
+    $ddl .= "REM Generating CREATE statements for all Objects in schema";
+  }
   else
   {
     $ddl .= "REM Generating $action \U$type \Lstatement";
   }
 
   $ddl .= ( @$list == 1 ) ? '' : "s";
-  $ddl .= " for:\n" .
-          "REM\n"; 
+
+  if ( "\U$type" eq 'SCHEMA' )
+  {
+    $ddl .= "\n";
+  }
+  else
+  {
+    $ddl .= " for:\n";
+  }
+
+  $ddl .= "REM\n"; 
 
   # Only include the schema if the Type has such a beast.
   foreach my $row ( @$list )
@@ -4876,6 +6243,11 @@ sub _generate_heading
     {
       $ddl .= "REM\t\U@$row->[1]\n";
     }
+    # Schema's don't name individual objects
+    elsif ( "\L$type" eq 'schema' )
+    {
+      $ddl .= "REM\t\U@$row->[0]\n";
+    }
     # The rest do.
     else
     {
@@ -4883,7 +6255,7 @@ sub _generate_heading
     }
   }
 
-  $ddl .= "\n";
+  return $ddl .= "\n";
 };
 
 # sub _get_oracle_release
@@ -4903,13 +6275,13 @@ sub _get_oracle_release
       ");
 
   $sth->execute;
-  $oracle_release = $sth->fetchrow_array;
+  my $version = $sth->fetchrow_array;
 
   (
     $oracle_release,
     $oracle_major,
     $oracle_minor
-  ) = $oracle_release =~ /((\d+)\.(\d+)\S+)/;
+  ) = $version =~ /((\d+)\.(\d+)\S+)/;
 
   if ( $attr{ heading } )
   {
@@ -4936,7 +6308,6 @@ sub _get_oracle_release
 #
 #     [GRANT <role >            TO <name> {WITH ADMIN OPTION]]
 #     [GRANT <system privilege> TO <name> {WITH ADMIN OPTION]]
-#     [GRANT <privilege> ON <object> TO <name> {WITH GRANT OPTION]]
 #
 sub _granted_privs
 {
@@ -4951,7 +6322,7 @@ sub _granted_privs
               granted_role
             , DECODE(
                       admin_option
-                     ,'YES','WITH ADMIN OPTION'
+                     ,'YES','WITH ADMIN OPTION '
                      ,null
                     )                         AS admin_option
        FROM
@@ -4981,7 +6352,7 @@ sub _granted_privs
               privilege
             , DECODE(
                       admin_option
-                     ,'YES','WITH ADMIN OPTION'
+                     ,'YES','WITH ADMIN OPTION '
                      ,null
                     )                         AS admin_option
        FROM
@@ -5002,50 +6373,6 @@ sub _granted_privs
     $sql .= "PROMPT " .
             "GRANT \L@$row->[0] \UTO \L$name \U@$row->[1] \n\n" .
             "GRANT \L@$row->[0] \UTO \L$name \U@$row->[1];\n\n";
-  }
-
-  # Add object privileges
-  $stmt =
-      "
-       SELECT
-              privilege
-            , owner
-            , table_name
-            , DECODE(
-                      grantable
-                     ,'YES','WITH GRANT OPTION'
-                     ,null
-                    )                         AS grantable
-       FROM
-              dba_tab_privs
-       WHERE
-              grantee = UPPER( ? )
-       ORDER
-          BY
-              table_name
-            , privilege
-      ";
-
-  $sth = $dbh->prepare( $stmt );
-  $sth->execute( $name );
-  $aref = $sth->fetchall_arrayref;
-
-  foreach my $row ( @$aref )
-  {
-    my (
-         $privilege,
-         $owner,
-         $table,
-         $grantable,,
-       ) = @$row;
-
-    my $schema = _set_schema( $owner );
-
-    $sql .= "PROMPT " .
-            "GRANT \L$privilege \UON \L$schema$table \UTO \L$name " .
-            "\U$grantable \n\n" .
-            "GRANT \L$privilege \UON \L$schema$table \UTO \L$name " .
-            "\U$grantable;\n\n";
   }
 
   return $sql;
@@ -5250,6 +6577,175 @@ sub _key_columns
   }
 
   return join ( "\n  , ", @cols );
+}
+
+# sub _object_privs
+#
+# Returns DDL to create GRANT statements in the form of:
+#
+#     GRANT <privilege> ON <object> TO <name> [WITH GRANT OPTION]
+#
+#       and/or
+#
+#     GRANT <privilege>
+#     (
+#         column_name
+#       , column_name
+#     )
+#     ON <object> TO <name> [WITH GRANT OPTION]
+#
+sub _object_privs
+{
+  my ( $schema, $owner, $name, $view ) = @_;
+
+  my $sql;
+
+  my $stmt =
+      "
+       SELECT
+              grantee
+            , privilege
+            , DECODE(
+                      grantable
+                     ,'YES','WITH GRANT OPTION '
+                     ,null
+                    )                         AS grantable
+       FROM
+              ${view}_tab_privs
+       WHERE
+                  grantor    = UPPER( ? )
+              AND table_name = UPPER( ? )
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+              AND owner      = UPPER('$owner')
+      ";
+  }
+
+  $stmt .=
+      "
+       ORDER
+          BY
+              grantee
+            , privilege
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute( $owner, $name );
+  my $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    my (
+         $grantee,
+         $privilege,
+         $grantable,,
+       ) = @$row;
+
+    $sql .= "PROMPT " .
+            "GRANT \L$privilege \UON \L$schema$name \UTO \L$grantee " .
+            "\U$grantable \n\n" .
+            "GRANT \L$privilege \UON \L$schema$name \UTO \L$grantee " .
+            "\U$grantable;\n\n";
+  }
+
+  $stmt =
+      "
+       SELECT DISTINCT
+              grantee
+            , privilege
+            , DECODE(
+                      grantable
+                     ,'YES','WITH GRANT OPTION '
+                     ,null
+                    )                         AS grantable
+       FROM
+              ${view}_col_privs
+       WHERE
+                  grantor    = UPPER( ? )
+              AND table_name = UPPER( ? )
+      ";
+
+  if ( $view eq 'DBA' )
+  {
+    $stmt .=
+      "
+              AND owner      = UPPER('$owner')
+      ";
+  }
+
+  $stmt .=
+      "
+       ORDER
+          BY
+              grantee
+            , privilege
+      ";
+
+  $sth = $dbh->prepare( $stmt );
+  $sth->execute( $owner, $name );
+  $aref = $sth->fetchall_arrayref;
+
+  foreach my $row ( @$aref )
+  {
+    my (
+         $grantee,
+         $privilege,
+         $grantable,,
+       ) = @$row;
+
+    $sql .= "PROMPT " .
+            "GRANT \L$privilege \UON \L$schema$name \UTO \L$grantee " .
+            "\U$grantable\n\n" .
+            "GRANT \L$privilege \n(\n    ";
+
+    $stmt =
+      "
+       SELECT
+              LOWER(column_name)
+       FROM
+              ${view}_col_privs
+       WHERE
+                  grantor    = UPPER( ? )
+              AND privilege  = UPPER( ? )
+              AND table_name = UPPER( ? )
+      ";
+
+    if ( $view eq 'DBA' )
+    {
+      $stmt .=
+      "
+              AND owner      = UPPER('$owner')
+      ";
+    }
+
+    $stmt .=
+      "
+       ORDER
+          BY
+              grantee
+            , privilege
+      ";
+
+    $sth = $dbh->prepare( $stmt );
+    $sth->execute( $owner, $privilege, $name );
+    my $aref = $sth->fetchall_arrayref;
+
+    my @cols;
+    foreach my $row ( @$aref )
+    {
+      push @cols, $row->[0];
+    }
+
+    $sql .= join ( "\n  , ", @cols );
+
+    $sql .= "\n)\n\UON \L$schema$name \UTO \L$grantee \U$grantable;\n\n";
+  }
+
+  return $sql;
 }
 
 # sub _partition_key_columns
@@ -6275,6 +7771,16 @@ sub _segment_attributes
        $blocks,
      ) = @$arrayref;
 
+  unless ( $attr{ 'storage' } )
+  {
+    if ( $attr{ 'tblspace' } )
+    {
+      $sql .= "${indent}TABLESPACE          \L$tablespace\n";
+    }
+
+    return $sql;
+  }
+
   ( $initial, $next ) = _initial_next( $blocks ) if $attr{ 'resize' };
 
   if ( $organization eq 'HEAP' )
@@ -6294,9 +7800,28 @@ sub _segment_attributes
           "${indent}  NEXT              $next\n" .
           "${indent}  MINEXTENTS        $min_extents\n" .
           "${indent}  MAXEXTENTS        $max_extents\n" .
-          "${indent}  PCTINCREASE       $pct_increase\n" .
-          "${indent}  FREELISTS         $freelists\n" .
-          "${indent}  FREELIST GROUPS   $freelist_groups\n";
+          "${indent}  PCTINCREASE       $pct_increase\n";
+
+    if (
+            $oracle_major < 8
+         or ( $oracle_major == 8 and $oracle_minor == 0 )
+       )
+    {
+      unless (
+                  $isasnaptabl
+               or $isasnapindx
+             )
+      {
+        $sql .= "${indent}  FREELISTS         $freelists\n" .
+                "${indent}  FREELIST GROUPS   $freelist_groups\n";
+      }
+    }
+    else
+    {
+      $sql .= "${indent}  FREELISTS         $freelists\n" .
+              "${indent}  FREELIST GROUPS   $freelist_groups\n";
+    }
+
 
     if (
             $oracle_major > 8
@@ -6310,7 +7835,10 @@ sub _segment_attributes
 
   $sql .= "${indent}$logging\n"    if $oracle_major > 7;
 
-  $sql .= "${indent}TABLESPACE          \L$tablespace\n";
+  if ( $attr{ 'tblspace' } )
+  {
+    $sql .= "${indent}TABLESPACE          \L$tablespace\n";
+  }
 
   return $sql;
 }
@@ -6351,6 +7879,7 @@ sub _set_sizing
                 WHERE
                            bytes  IS NOT NULL
                        AND blocks IS NOT NULL
+                       AND rownum  < 2
                 UNION
                 SELECT
                        bytes / blocks   AS block_size
@@ -6359,6 +7888,7 @@ sub _set_sizing
                 WHERE
                            bytes  IS NOT NULL
                        AND blocks IS NOT NULL
+                       AND rownum  < 2
               )
        WHERE
               rownum < 2
@@ -6689,11 +8219,8 @@ sub _table_columns
                               )
                    ,33
                   )
-           || DECODE(
-                      nullable
-                     ,'N','NOT NULL'
-                     ,     null
-                    )
+            , nullable
+            , data_default
        FROM
               ${view}_tab_columns
        WHERE
@@ -6785,11 +8312,8 @@ sub _table_columns
                               )
                    ,32
                   )
-           || DECODE(
-                      nullable
-                     ,'N','NOT NULL'
-                     ,     null
-                    )
+            , nullable
+            , data_default
        FROM
               ${view}_tab_columns
        WHERE
@@ -6813,6 +8337,9 @@ sub _table_columns
              column_id
       ";
 
+  $dbh->{ LongReadLen } = 1024;    # Allows Default to be 1K
+  $dbh->{ LongTruncOk } = 1;
+
   $sth = $dbh->prepare( $stmt );
   $sth->execute( $name );
   my $aref = $sth->fetchall_arrayref;
@@ -6820,7 +8347,15 @@ sub _table_columns
   my @cols;
   foreach my $row ( @$aref )
   {
-    push @cols, $row->[0];
+    my ( $column, $nullable, $default ) = @$row;
+
+    # Knock off any trailing newlines
+    chomp $default;
+
+    $column .= "DEFAULT $default "   if defined $default;
+    $column .= 'NOT NULL'            if $nullable eq 'N';
+
+    push @cols, $column;
   }
 
   return join ( "\n  , ", @cols ) . "\n";
@@ -6838,7 +8373,7 @@ DDL::Oracle - a DDL generator for Oracle databases
 
 =head1 VERSION
 
-VERSION = 1.07
+VERSION = 1.11
 
 =head1 SYNOPSIS
 
@@ -6853,7 +8388,7 @@ VERSION = 1.07
                           PrintError => 0,
                           RaiseError => 1
                          }
-     );
+                       );
 
  # Use default resize and schema options.
  # query default DBA_xxx tables (could use USER_xxx for non-DBA types)
@@ -6885,6 +8420,19 @@ VERSION = 1.07
 
  print $ddl;    # Use STDOUT so user can redirect to desired file.
 
+ # Here's another example, this time for type 'components'.  This type
+ # differs from the norm, because it has no owner and no name.
+
+ my $obj = DDL::Oracle->new(
+                             type => 'components',
+                             list => [[ 'no owner','no name' ]]
+                           );
+
+ my $ddl = $obj->create;
+
+ print $ddl;
+
+
 =head1 DESCRIPTION
 
 =head2 Overview
@@ -6913,8 +8461,7 @@ the main driver for DDL::Oracle was the object management needs of
 Oracle DBA's.  The "resize" method generates DDL for a list of 
 tables or indexes.  For partitioned objects, the "appropriate" 
 size of EACH partition is calculated and supplied in the generated 
-DDL.  The original defrag.pl will be rewritten to use DDL::Oracle, 
-and supplied with its distribution.
+DDL.
 
 =head2 Initialization and Constructor 
 
@@ -6931,7 +8478,7 @@ several session level attributes.  These are:
                      USER views), but see attributes 'heading' for
                      exceptions:
 
-                         V$DATABASE
+                         V$DATABASE [i.e., sys.V_$DATABASE table]
 
                      And, in order to generate CREATE SNAPSHOT LOG
                      statements, you will also need to create a PUBLIC
@@ -6982,6 +8529,21 @@ several session level attributes.  These are:
                helpful in a multi-statement file.  "1" means include
                the prompt; "0" or "" means to suppress the prompt.
 
+      grants   Defines whether to include object grants following a
+               CREATE statement for Tables, Views, Materialized Views
+               [Snapshots], Sequences, Procedures, Functions, Packages,
+               Types and Synonyms.   "1" means include the grant state-
+               ments; "0" or "" means to suppress the grant statements.
+               The default is "0".
+
+      storage  Defines whether to include the STORAGE clause [plus
+               PCTUSED, PCTFREE, INITRANS and MAXTRANS] in DDL for tables
+               and indexes. "1" means include these clauses; "0" or ""
+               means omit them. The default is "1".
+
+      tblspace Defines whether to include the TABLESPACE clause in DDL
+               for tables and indexes.  "1" means include this clause;
+               "0" or "" means omit it. The default is "1".
 new  
 
 The B<new> method is the object constructor.  The two mandatory object
@@ -7006,6 +8568,12 @@ definitions are supplied with this method, to wit:
 create
 
 The B<create> method generates the DDL to create the list of Oracle objects.
+Virtually every type of Oracle object (table, index, user, synonym, trigger,
+etc.) can be CREATEd via this method -- see hash %create for a complete list.
+There is also a type called 'components' which is an aggregate type.  It
+generates the DDL for all objects of types which do not have an owner
+(tablespace, rollback segment, profile, role, user) and for PUBLIC database
+links and synonyms.  See the SYNOPSIS for an example of this.
 
 drop
 

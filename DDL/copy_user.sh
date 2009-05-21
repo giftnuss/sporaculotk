@@ -11,3 +11,8 @@ sqlplus -s /  << EOF | tee copy_user.log
   @ copy_user.sql
 EOF
 
+# $Log: copy_user.sh,v $
+# Revision 1.2  2000/11/11 07:48:59  rvsutherland
+# Added CVS tags
+#
+
