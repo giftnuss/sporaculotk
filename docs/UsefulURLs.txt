@@ -12,3 +12,11 @@ http://www.oracletool.com/
 
 PostGres Mailing Lists
 http://www.postgresql.org/lists/all-lists.html
+
+Orac Web Pages
+http://kkitts.com/orac-dba/
+http://www.rodneyspace.com/orac/
+http://www.tux.org/orac-dba/
+
+Sean's Karma Page
+http://www.panix.com/~shull/karma/index.html

@@ -1,35 +1,33 @@
-Orac --  DBA GUI tool for Perl/Tk; Oracle, Informix and Sybase
+Orac  --  DBA GUI tool for Perl/Tk; Oracle, Informix and Sybase
 
-   Copyright (c) 1998,1999  Andy Duncan, England
+THIS IS A DEVELOPMENT VERSION OF ORAC, AND AN ATTEMPT TO ADD ORACLE 
+DEVELOPMENT TOOLS TO ORAC, AS WELL AS DBA ONES.  FOR STABLE DBA USAGE,
+UNTIL FURTHER NOTICE, USE THE Orac-1.2.0 DOWNLOAD.
+
+   Copyright (c) 1998,1999,2000,2001 Andy Duncan, England
 
    email:         andy_j_duncan@yahoo.com
    CPAN id:       CPAN/authors/id/A/AN/ANDYDUNC
 
+=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+
+        Orac runs over the *Web* using a Netscape Perl/Tk Plug-In
+        created by Frank Holt.  Please run up Orac, and go to Help
+        information for more details (help/WebPlugIn.txt).
+=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+
+
+NB: ....Oracle Development Usage Gradually Being Added...
+    .........By Andy Duncan & Richard Sutherland.........
+
+NB: ....Further Oracle DBA Development Gradually Being Added...
+    ..................By Richard Sutherland....................
+
 NB: This README file does not contain all of the information within
 the Orac distribution.  For more specialised information, please go
-to our "docs" directory.
+to our "docs" or "help" directories.
 
-################################################################################
-# The next stable version of Orac will be Orac-1.2.0, which we hope to release
-# before the end of summer, however,this is a very flexible date.
-#
-# However, as the Orac-1.1.z series progresses, it should hopefully gather
-# stability and functionality.  To try out all new Orac functionality, keep
-# coming back regularly, and downloading new developmental versions.  Living on
-# the bleeding edge can be fun ;-)
-#
-# We plan to make releases every few days, if not sooner.
-################################################################################
-
-Orac WEB PAGE:
-
-You can usually find our web page at:
-
-=> http://www.kkitts.com/
-
-This is managed by Kevin Kitts.  Please go here for the latest information,
-on Orac.
-
+Orac-1.2.0 is the latest stable version of Orac.  You may wish
+to download this if you have any problems with these later development
+versions, if you are a DBA.
 
 TERMS AND CONDITIONS OF USE:
 
@@ -64,13 +62,52 @@ IS PROVIDED ON AN "AS IS" BASIS, AND THE AUTHORS AND DISTRIBUTORS HAVE
 NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR
 MODIFICATIONS.
 
-
 PREREQUISITES (For Everybody)
 
-   At least: perl5.005_02
-             DBI-1.13
-             Tk800.015
-             Latest relevant DBD database driver for DBI-1.13
+   At least: perl5.6.0
+
+             DBI-1.10
+
+             Tk800.000
+
+             Latest relevant DBD database driver for DBI-1.10
+             (eg: For Oracle DBD-Oracle-1.xx)
+
+   Oracle developers will also require Richard Sutherland's DDL::Oracle
+   module.  We are using:
+
+             DDL-Oracle-1.07.tar.gz 
+
+   This (or the latest version) is available from:
+
+   http://www.perl.com/CPAN-local/modules/by-authors/id/R/RV/RVSUTHERL/
+
+   For an indefinite period, the latest DDL::Oracle package will
+   come automatically with the Orac download.  This may change.  If you
+   go to the DDL directory within this distribution, you will also
+   see the tools which come with the DDL::Oracle release, which may
+   be of some use to you.
+
+ORACLE DEVELOPER GRAPHICAL OPTION:
+
+   If you have DBD-Chart installed, Oracle developers also acquire
+   a graphical option automatically.
+
+   1.  You can get hold of DBD-Chart from:
+
+       => http://home.earthlink.net/~darnold/dbdchart/
+
+       This module also requires the installation of GD.pm and the full
+       instructions for installing this are within the DBD-Chart
+       documentation. Hopefully GD.pm will eventually become part
+       of the standard Perl distribution.
+    
+   2.  Use of DBD-Chart also requires the separate Perl/Tk installation of
+       Tk::JPEG (at least version 2.005) which is available from:
+    
+       => http://www.perl.com/CPAN-local/modules/by-module/Tk/
+    
+       Tk::JPEG is also available on ActiveState for ActivePerl.
 
 LINUX USERS:
 
@@ -89,7 +126,7 @@ REALLY QUICK START GUIDE:
 
 SLIGHTLY LESS QUICK START GUIDE (based upon Oracle on Solaris):
 
-*). Load perl5.005_02, DBD-Oracle-1.03, DBI-1.13 & Tk800.015
+*). Load perl5.6.0, DBD-Oracle-1.06, DBI-1.14 & Tk800.022
 *). Unzip (gzip -d, gunzip) the Orac-x.y.z.tar.gz file
 *). Untar (tar xvf) the Orac-x.y.z.tar file
 *). Set ORACLE_HOME in your environment
@@ -139,44 +176,28 @@ Simple graphical ideas for turning difficult-to-read database information
 into useful pictures are particularly welcomed, as is functionality
 not currently supplied within other GUI tools.  General ideas for improving
 Orac (which began life as a SQL script for killing rogue Oracle processes)
-are always welcomed.
-
-We hope you both enjoy using Orac, and save yourself some time by using it.
+are always welcomed.  We hope you both enjoy using Orac, and save 
+yourself some time by using it.
 
 *Occasionally, this rule is bent a little to allow such tool extensions as
 our 'Explain Plan' functionality for Oracle users.
 
 
-Orac MONGERS (in alphabetical surname order):
+Orac Hall of Fame, in alphabetical surname order:
 
-Name           Email/Webpage                    Patch of Interest
-----           -------------                    -----------------
-
-Bruce Albrecht <bruce@zuhause.mn.org>           Multi-User Functionality
-
-Kevin Brannen  <kbrannen@physiciansdata.com>    Informix/RulesMeister
-
-Andy Duncan    <andy_j_duncan@yahoo.com>        Oracle
-
-Sean Hull      <shull@panix.com>                Linux/Oracle
-               http://www.iheavy.com/
-
-Kevin Kitts    <kkitts@his.com>                 Linux/Webmaster
-               http://www.kkitts.com/
-
-Thomas Lowery  <stlassociates@usa.net>          Shell/OO Development
-               http://tlowery.hypermart.net/
-
-Charles Wolfe  <cwolfe@ix.netcom.com>           NT Guru
-
-Alex Shnir     <alex@getmessage.com>            Sybase
-
+Bruce Albrecht
+Kevin Brannen
+Andy Duncan <andy_j_duncan@yahoo.com> Oracle Devel Work
+Sean Hull
+Kevin Kitts
+Thomas Lowery
+Charles Wolfe, Guru
+Alex Shnir
+Richard Sutherland <rvsutherland@yahoo.com> Oracle DBA & Devel Work
 
 FUTURE OF Orac:
 
-We want to create a completely OS independent, database
-independent Open Source tool.  If you'd like to help us do this, and/or join
-the Orac Mongers listing above, please let us know and we'll go from there.
+There is no plan.  We're just going to keep going until they take us away.
 
 
 REVISION HISTORY:
@@ -308,15 +329,63 @@ Orac-1.1.35 Horrible bug fix for ActiveState not requiring ORACLE_HOME,
             where unixlike does.
 Orac-1.1.36 Attempt on Monitor fix.  Steve Humpage 'join' to 'catfile'
             fix for backward compatibility.
+Orac-1.1.37 New orac_Sybase from Alex.
+Orac-1.1.38 -
+Orac-1.1.40 Final 1.1 KevinB Informix change, +changes to Shell
+Orac-1.1.41 -
+Orac-1.1.43 - ... Shell development, trying to fix Monitor Bug
+Orac-1.1.44 Monitor Bug is an Oracle-Linux bug.  Oracle have been told
+            and hopefully will fix in later Oracle version.
+Orac-1.1.45 Bits and Bobs.
+Orac-1.1.46 Final Beta release of Tom's Shell program + addition of
+            primitive help for getting OracWeb going.
+Orac-1.1.47 Mix-up on Beta module versions, should now be sorted out.
+Orac-1.1.48 Change on Oracle curr_users_orac.1.sql script by Andre Seesink
+            +other code changes by Andre marked in files :-)
+Orac-1.1.49 Last Andre Seesink and Duncan Lawie upgrades, plus bug fix
+            by DCL :-)
+Orac-1.1.50 Slight changes, + more commenting and switching within the
+            orac_Monitor module, which, after a consensus vote, will be kept
+            within the distribution for later improvement despite problems.
+            If you'd like to make this 100% kosher, please write and let
+            us know :)
+Orac-1.1.51 Heck and blast, a typo on my part.  Whoops, sorry fellas! :-)
+Orac-1.2.0  After no adverse reports on 1.1.51, this is that release
+            with this README file name and the program's version number
+            changed.  Thanks to everyone who's helped us get this far.
+            We ain't finished yet.
+Orac-1.2.1  Yep, it HAS been a while, but let's get this monkey running
+            again.  The VERY early beginnings of developer support
+            for Oracle developers using Richard Sutherland's DDL option.
+            Thanks to Andy Campbell, Sun employee and DBA genius! :-)
+Orac-1.2.2  Much more embodiement of Richard Sutherland's DDL-Oracle
+            coded by RVS and AndyD.  This version of Oracle now automatically 
+            incorporates the latest version of DDL::Oracle.  Automatic
+            detection of DBA or normal development user.  Wishlists
+            are welcome of where Oracle Development functionality
+            should go next.  We're just making this up as we go along! :-)
+Orac-1.2.3  On the Oracle DBA side, Richard Sutherland has added a new 
+            instance method -- show_space -- to DDL::Oracle.  It produces 
+            a space analysis report similar to the old 
+            Tab_FreeSpace.99.sql and Index_FreeSpace.99.sql.  These are
+            now no longer called, therefore we move closer to full GPL.
+            On the VERY experimental Oracle developer side of life, Andy
+            has added further developer options based on DDL-Oracle,
+            and a graphics option, if Perl has GD, Tk::PNG and DBD::Chart
+            installed.  AD fixed some disconnection warning errors
+            and the menu switches between Oracle developer and DBA.
+
+Orac-alpha-1.2.4  Upgrade to Perl 5.6.0.  Lots of other fiddly bits to do
+                  with charting, but these still very ALPHA.
+Orac-alpha-1.2.5  More development stuff, and Richard has extended
+                  DDL::Oracle usage to cover even more Oracle8i areas.
+Orac-alpha-1.2.5  Couple more graphs added, graphical library now
+                  required, Tk::JPEG, because it is available on CPAN for
+                  UNIX, and ActiveState, for ActivePerl.
 
 EXTRA NOTES FOR LINUX USERS:
 
-The following summarised notes have been taken from
-Kevin Kitts' Orac home page:
-
-=> http://www.kkitts.com/orac-dba/
-
-If you'd like any more detail, please go there first.
+Originally provided by Kevin Kitts.
 
 Requirements for Running Orac (under Linux)
 -----------------------------------------------
@@ -339,6 +408,17 @@ Make sure that you can get sql*plus to work first. If that works, make sure
 that the DBI/DBD make tests pass. If all of the above condtions hold true
 you should have no problem running Orac.
 
+KNOWN LINUX-ORACLE BUG
+
+There is a known Oracle-Linux bug, which may cause the Orac Monitor to fail
+when attempting to connect to recently shutdown databases.  Oracle have been
+informed, and will hopefully fix bug in a future release.  This is a general
+OCI bug, and has caused problems with other programs.  One workround is not
+to use Orac Monitor, but if this required, if you don't need LOBS etc then 
+you could try recompiling DBI with 'perl Makefile.PL -8'.  See DBI README
+for more details on this.
+
+This bug may also occur on other OSes, but cannot be replicated on Solaris.
 
 EXTRA NOTES FOR WINDOWS NT USERS:
 
@@ -348,62 +428,31 @@ Environment required:
 
 Basic Perl Requirement:
 
-*. ActivePerl build 519
+*. ActivePerl
 
 Packages on top:
 
-*. DBD-Oracle (or DBD-Sybase etc)
+*. DBD-Oracle8 (or DBD-Sybase etc)
 *. DBI
 *. Tk
-*. Win32-TieRegistry
-
-The above environment was created under the following
-operating system conditions:
-
-NT 4.0 Enterprise Edition (SP 3, no compiler)
----------------------------------------------
-Nothing special is needed for the installation,
-which should run smoothly using these instructions:
 
 *. Install the ActivePerl binary distribution
 from ActiveState.com
 
 *. Then download and install the binaries for the
-various modules (Tk, DBI, DBD-Oracle, etc)
-from ActiveState's ftp site.
-
-All the modules come with working install scripts,
-so installation is just a matter of running
-package manager script which comes with ActivePerl.
+various modules (Tk, DBI, DBD-Oracle8, etc)
+from ActiveState's Perl package site via PPM.
 
 Then download Orac-x.y.z, install and run.
 (probably always best to use latest version)
 
-(The above instructions have also been tried on a
-Win98 box with complete success)
-
 The ActiveState URLs are:
 
-=> http://www.activestate.com/ActivePerl/
-=> http://www.activestate.com/packages/zips/
-
-Packages Required:
-------------------
-The ActiveState packages you will need, will be Tk, DBI and
-whichever DBD driver you need (eg: DBD::Oracle, DBD::Sybase).
-
-You may find problems with Win32-TieRegistry errors.  If
-this is the case, you may also need to install the Win32-TieRegistry
-package, also from packages/zips.
-
+=> http://www.activestate.com/
 
 Download
 --------
 You can download the latest Orac via:
-
-=> http://www.kkitts.com/
-
-or you can download directly from the master CPAN site, here:
 
 => ftp://ftp.funet.fi/pub/languages/perl/CPAN/authors/id/A/AN/ANDYDUNC/
 
@@ -413,21 +462,5 @@ boxes to connect remotely.  If you still cannot connect
 remotely, you may have to slightly change the DBI->connect
 statements to give DBI the right configuration for your
 remote database connection.
-
-Orac Users Mailing List
------------------------
-Please use the following mailing list resources to find out more about Orac:
-
-For information on the installation, configuration and use of Orac you can
-subscribe to the Orac User's mailing list by sending an empty e-mail (with the
-word subscribe on the subject line) to:
-
-manage-orac-dba-users-subscribe@listserv.kkitts.com
-
-For those interested in following the developer discussion (or perhaps even
-developing for Orac!) a developers list is available. Please send an empty
-e-mail (with the word subscribe on the subject line) to:
-
-manage-orac-dba-developers-subscribe@listserv.kkitts.com
 
 EOF

@@ -1,6 +1,6 @@
 #!/usr/local/bin/perl
 ######################################################################
-# Copyright (c) 1998,1999 Andy Duncan
+# Copyright (c) 1998,1999,2000,2001 Andy Duncan
 #
 # You may distribute under the terms of either the GNU General
 # Public License or the Artistic License,as specified in the Perl
@@ -32,23 +32,39 @@ functions.
 =cut
 
 # Pick up all the standard modules necessary to run the program
+# Make sure we have the minimal versions of Perl, DBI and Tk.
+# (thanks to Tom Lowery)
 
-use Tk;
+require 5.6.0;
+
+use Tk '800.000';
+
+use FindBin;
+use lib $FindBin::RealBin;
+
+# Splash Screen
+
+main::splash_screen(0);
+
+# More requirements, and the rest of the code to be loaded
+# before the main loop.
+
+use DBI '1.10';
+$VERSION = '1.260';
+
+# Now enter strict mode
 use strict;
+
 use Carp;
 use FileHandle;
 use Cwd;
 use Time::Local;
-use DBI;
 use File::Copy;
 use File::Basename;
 # Thanks to Sean Kamath :-)
 use File::Spec;
-use FindBin;
-use lib $FindBin::RealBin;
 
-# A hunky clundgy kinda-of-a-thing
-# to handle screen resizing
+# A hunky clundgy kinda-of-a-thing to handle screen resizing
 
 use Tk::DialogBox;
 use Tk::Balloon;
@@ -77,11 +93,7 @@ main::read_language();
 
 # Some hard-coded defaults
 
-$main::orac_version = '1.1.36';
-
 $main::ssq = $main::lg{see_sql};
-$main::ec = $main::lg{def_fill_fld_col};
-$main::fc = $main::lg{def_fg_col};
 
 # Sybase warnings special variable
 
@@ -246,26 +258,9 @@ $file_mb->separator();
 # Build up the colour options, so
 # a nice lemonchiffon is possible as a backdrop :)
 
-$main::bc_txt = $main::lg{back_col_menu};
-$file_mb->cascade(-label=>$main::bc_txt);
-$main::bc_men = $file_mb->cget(-menu);
-$main::bc_cols = $main::bc_men->Menu;
-
-# Now pick up all the lovely colours and build a radiobutton
-
-$file_mb->entryconfigure($main::bc_txt,-menu=>$main::bc_cols);
-open(COLOUR_FILE, "$FindBin::RealBin/txt/colours.txt");
-while(<COLOUR_FILE>){
-   chomp;
-   eval {
-      $main::bc_cols->radiobutton(
-         -label=>$_,-background=>$_,
-         -command=>[ sub {main::bc_upd()}],
-         -variable=>\$main::bc,
-         -value=>$_);
-   };
-}
-close(COLOUR_FILE);
+main::colour_menu(\$file_mb, $main::lg{back_col_menu}, \$main::bc);
+main::colour_menu(\$file_mb, $main::lg{fore_col_menu}, \$main::fc);
+main::colour_menu(\$file_mb, $main::lg{entry_col_menu}, \$main::ec);
 
 # Now a Font option for KB :-)
 
@@ -316,15 +311,25 @@ $main::balloon = $main::mw->Balloon(-statusbar => $balloon_status,
                                     -state => 'status',
                                    );
 
-# The Reconnection Button
+# The Orac Text Label
 
-my $b_image = $main::mw->Photo(-file=>"$FindBin::RealBin/img/recon.gif");
+my $b_image = $main::mw->Photo(-file=>"$FindBin::RealBin/img/s_splash.gif");
 
 my $b = $bb->Button(-image=>$b_image,
                     -command=>sub{main::bz();
-                                  main::get_db();
+                                  main::splash_screen(1);
                                   main::ubz()}
                    )->pack(side=>'left');
+
+# The Reconnection Button
+
+$b_image = $main::mw->Photo(-file=>"$FindBin::RealBin/img/recon.gif");
+
+$b = $bb->Button(-image=>$b_image,
+                 -command=>sub{main::bz();
+                               main::get_db();
+                               main::ubz()}
+                )->pack(side=>'left');
 
 $main::balloon->attach($b, -msg => $main::lg{reconn});
 
@@ -471,8 +476,10 @@ $bb->Label(-image=>$orac_li,
                   -anchor=>'e'
                  );
 
+my $shell_image = $main::mw->Photo(-file=>"$FindBin::RealBin/img/shell.gif");
+
 $b = $bb->Button(
-           -text=>$main::lg{shell},
+           -image=>$shell_image,
            -command=>
                  sub{
                        main::call_shell();
@@ -487,7 +494,7 @@ $main::v_text->pack(-expand=>1,-fill=>'both');
 
 # Set main window title and set window icon
 
-$main::mw->title( "$main::lg{orac_pan} $main::orac_version" );
+$main::mw->title( "$main::lg{orac_pan} VERSION $main::VERSION" );
 main::iconize($main::mw);
 
 # Sort out which database we're going to be working with
@@ -503,6 +510,12 @@ if ((!defined($main::orac_curr_db_typ)) ||
 
    $main::orac_curr_db_typ = main::select_dbtyp(1);
 }
+
+# 1.1.50 Change for Tom, to prevent splash screen interfering with login.
+
+main::destroy_splash();
+
+# Now we go to Login, and get the required database
 
 main::get_db();
 
@@ -530,12 +543,16 @@ sub back_orac {
    # options in the main configuration file
 
    if (defined($main::current_db)){
+      $main::conn_comm_flag = 1;
       my $rc  = $main::dbh->disconnect;
+      $main::conn_comm_flag = 0;
    }
    main::fill_defaults(  $main::orac_curr_db_typ,
                          $main::sys_user,
                          $main::bc,
-                         $main::v_db
+                         $main::v_db,
+                         $main::fc,
+                         $main::ec
                       );
    exit 0;
 }
@@ -551,21 +568,18 @@ sub fill_defaults {
 
    # Make sure defaults the way the user likes 'em.
 
-   my($db_typ, $dba, $loc_bc, $db) = @_;
+   my($db_typ, $dba, $loc_bc, $db, $loc_fc, $loc_ec) = @_;
 
    my $filename = File::Spec->catfile($main::orac_home, 'what_db.txt');
 
    open(DB_FIL,">$filename");
 
-   print DB_FIL $db_typ .
-                '^' .
-                $dba .
-                '^' .
-                $loc_bc .
-                '^' .
-                $db .
-                '^' .
-                "\n";
+   print DB_FIL $db_typ .  '^' .
+                $dba .  '^' .
+                $loc_bc .  '^' .
+                $db .  '^' .
+                $loc_fc .  '^' .
+                $loc_ec .  '^' .  "\n";
 
    close(DB_FIL);
 
@@ -575,14 +589,10 @@ sub fill_defaults {
 
    open(FONT_FIL,">$filename");
 
-   print FONT_FIL $main::font{family} .
-                  '^' .
-                  $main::font{size} .
-                  '^' .
-                  $main::font{weight} .
-                  '^' .
-                  $main::font{slant} .
-                  '^' .
+   print FONT_FIL $main::font{family} .  '^' .
+                  $main::font{size} .  '^' .
+                  $main::font{weight} .  '^' .
+                  $main::font{slant} .  '^' .
                   "\n";
 
    close(FONT_FIL);
@@ -593,12 +603,9 @@ sub fill_defaults {
 
    open(PRINT_FIL,">$filename");
 
-   print PRINT_FIL $main::print{rotate} .
-                  '^' .
-                  $main::print{paper} .
-                  '^' .
-                  $main::print{command} .
-                  '^' .
+   print PRINT_FIL $main::print{rotate} .  '^' .
+                  $main::print{paper} .  '^' .
+                  $main::print{command} .  '^' .
                   "\n";
 
    close(PRINT_FIL);
@@ -615,10 +622,8 @@ error messages, except on the last attempt at connection.
 sub get_connected {
 
    # Put up dialogue to pick a new database.
-   # Allow user to change database type,
-   # if they wish.  Also, set flag
-   # to help prevent connection
-   # error messages, except on the
+   # Allow user to change database type, if they wish.  Also, set flag
+   # to help prevent connection error messages, except on the
    # last attempt at connection.
 
    my $ps_u;
@@ -633,7 +638,9 @@ sub get_connected {
       $main::current_db->must_f_clr();
       $main_label->configure( -image => $main::conn_ball{red} );
       $main::l_top_t = $main::lg{disconn};
+      $main::conn_comm_flag = 1;
       my $rc = $main::dbh->disconnect;
+      $main::conn_comm_flag = 0;
       undef $main::current_db;
       $auto_log = 0;
    }
@@ -648,7 +655,7 @@ sub get_connected {
          require db::orac_Oracle;
          $main::current_db = orac_Oracle->new( $main::mw,
                                                $main::v_text,
-                                               $main::orac_version );
+                                               $main::VERSION);
 
       }
       elsif($main::orac_curr_db_typ eq 'Informix'){
@@ -656,7 +663,7 @@ sub get_connected {
          require db::orac_Informix;
          $main::current_db = orac_Informix->new( $main::mw,
                                                  $main::v_text,
-                                                 $main::orac_version );
+                                                 $main::VERSION );
 
       }
       elsif($main::orac_curr_db_typ eq 'Sybase'){
@@ -664,7 +671,7 @@ sub get_connected {
          require db::orac_Sybase;
          $main::current_db = orac_Sybase->new( $main::mw,
                                                $main::v_text,
-                                               $main::orac_version );
+                                               $main::VERSION );
 
       }
       else {
@@ -673,7 +680,7 @@ sub get_connected {
             orac_Base->new( 'Base',
                             $main::mw,
                             $main::v_text,
-                            $main::orac_version );
+                            $main::VERSION );
 
       }
 
@@ -790,6 +797,10 @@ sub get_connected {
       # Now put up the dialogue on the main screen
       # Determine if auto log on will work. If the env
       # variables are not set, no auto log.
+
+      #$ENV{DBI_DSN} = "dbi:Oracle:orcl";
+      #$ENV{DBI_USER} = "scott";
+      #$ENV{DBI_PASS} = "tiger";
 
       print STDERR "Before DBI dsn>$ENV{DBI_DSN}<\n" if ($main::debug > 0);
       print STDERR "          user>$ENV{DBI_USER}<\n" if ($main::debug > 0);
@@ -1072,16 +1083,22 @@ sub select_dbtyp {
 
    # A successful connection means we store the variable for later
 
-   # Pick up the standard DBA user for the particular database
+   # Pick up the standard user for the particular database
    ($main::sys_user,$main::v_db) = get_dba_user($loc_db);
-   main::fill_defaults($loc_db, $main::sys_user, $main::bc, $main::v_db);
+   main::fill_defaults($loc_db, 
+                       $main::sys_user, 
+                       $main::bc, 
+                       $main::v_db,
+                       $main::fc, 
+                       $main::ec
+                      );
 
    return $loc_db;
 }
 
 =head2 get_dba_user
 
-Picks up the typical DBA user for the particular database.
+Picks up the typical user for the particular database.
 
 =cut
 
@@ -1091,7 +1108,7 @@ sub get_dba_user {
    my $dba_user;
    my $new_db;
 
-   # Picks up the typical DBA user for the particular database
+   # Picks up the typical user for the particular database
 
    my $first_place = File::Spec->catfile($main::orac_home, 'all_dbs.txt');
    my $second_place = File::Spec->catfile($FindBin::RealBin, 'config');
@@ -1129,7 +1146,9 @@ sub get_db {
    $main::current_db->init2( $main::dbh );
 
    # Now sort out Jared's tools and configurable menus
-   if ($main::orac_orig_db ne $main::orac_curr_db_typ){
+
+   if (($main::orac_orig_db ne $main::orac_curr_db_typ) ||
+       ($main::orac_curr_db_typ =~ /Oracle/)){
 
       # We do this, if either we're into the program for the first time,
       # or the user has changed the database type
@@ -1149,7 +1168,7 @@ Makes the main GUI pointer go busy.
 
 sub bz {
    # Make the main GUI pointer go busy
-   $main::mw->Busy;
+   $main::mw->Busy(-recurse=>1);
 }
 
 =head2 ubz
@@ -1192,6 +1211,7 @@ sub mes {
 =head2 bc_upd
 
 Change the background colour on all open windows.
+Also foregrounds, where not a Canvas.
 This is where all those text and window handles come in useful.
 
 =cut
@@ -1204,6 +1224,7 @@ sub bc_upd {
 
    eval {
       $main::v_text->configure(-background=>$main::bc,
+                               -foreground=>$main::fc,
                                -font=>$main::font{name});
    };
    my $comp_str = "";
@@ -1218,8 +1239,15 @@ sub bc_upd {
          {
             eval {
                $kid->{text}->configure(-background=>$main::bc,
-                                       -font=>$main::font{name},
+                                       -font=>$main::font{name}
                                       );
+            };
+
+            unless ($kid =~ /Canvas/)
+            {
+               eval {
+                  $kid->{text}->configure(-foreground=>$main::fc);
+               }
             }
          }
       }
@@ -1341,7 +1369,22 @@ sub config_menu {
    # Initialize variables to prevent
    # warnings
 
-   my $file = "$FindBin::RealBin/menu/$main::orac_curr_db_typ/menu.txt";
+   my $menu_file_name = "menu.txt";
+   if ($main::orac_curr_db_typ eq "Oracle"){
+      if (!$main::current_db->dba_user){       
+         if ($main::current_db->jpeg_user){   
+            $menu_file_name = "menu_dev_jpeg.txt";
+         } else {                                
+            $menu_file_name = "menu_dev.txt";   
+         }                                     
+      } else {
+         if ($main::current_db->jpeg_user){   
+            $menu_file_name = "menu_jpeg.txt";
+         }
+      }
+   }
+   my $file = "$FindBin::RealBin/menu/$main::orac_curr_db_typ/" .
+              $menu_file_name;
    open(MENU_F, $file) or warn qq{Unable to open $file $!};;
    while(<MENU_F>){
 
@@ -2424,8 +2467,6 @@ sub pick_up_defaults {
    # colour.  Assign some pre-defined values in case
    # the config file not yet available.
 
-   $main::bc = $main::lg{def_backgr_col};
-
    if ($ENV{ORAC_HOME})
    {
 	 $main::orac_home = $ENV{ORAC_HOME};
@@ -2471,15 +2512,25 @@ sub pick_up_defaults {
    if(-e $file){
       open(DB_FIL,$file);
       while(<DB_FIL>){
+         chomp;
          my @hold = split(/\^/, $_);
          $main::orac_curr_db_typ = $hold[0];
          $main::sys_user = $hold[1];
          $main::bc = $hold[2];
          $main::v_db = $hold[3];
+         $main::fc = $hold[4];
+         $main::ec = $hold[5];
          $i = 1;
       }
       close(DB_FIL);
    }
+
+   if ((!defined($main::bc))||(length($main::bc) < 1))
+      {$main::bc = $main::lg{def_backgr_col}}
+   if ((!defined($main::fc))||(length($main::fc) < 1))
+      {$main::fc = $main::lg{def_fg_col}}
+   if ((!defined($main::ec))||(length($main::ec) < 1))
+      {$main::ec = $main::lg{def_fill_fld_col}}
 
    # Now deal with fonts
 
@@ -2631,7 +2682,9 @@ BEGIN {
 sub call_shell {
 
    main::bz();
-   $main::shell = orac_Shell->new( $main::mw, $main::dbh );
+              # Only define the shell instance if undefined.
+   $main::shell = orac_Shell->new( $main::mw, $main::dbh )
+              unless defined $main::shell;
    $main::shell->dbish_open();
    main::ubz()
 
@@ -2656,6 +2709,69 @@ sub font_button_message {
 
    $$balloon_ref->attach($$font_button_ref, -msg => $message );
    return $font;
+}
+
+sub splash_screen {
+
+   my($please_destroy_flag) = @_;
+
+   $main::splash_screen = MainWindow->new();
+   $main::splash_screen->overrideredirect(1);
+
+   my $splash_image = 
+      $main::splash_screen->Photo(-file=>"$FindBin::RealBin/img/splash.gif");
+
+   Tk::wm($main::splash_screen, "geometry",
+          "+" . 
+          int(($main::splash_screen->screenwidth)/2 - 
+              ($splash_image->width)/2) .
+          "+" . 
+          int(($main::splash_screen->screenheight)/2 - 
+              ($splash_image->height)/2));
+   
+   my $splash_label = 
+      $main::splash_screen->Button( -image => $splash_image,
+                                  )->pack(-fill=>'both', -expand => 1);
+   Tk::update($main::splash_screen);
+
+   if($please_destroy_flag){
+      sleep 5;
+      main::destroy_splash();
+   }
+}
+
+sub destroy_splash {
+
+   if ($main::splash_screen) {
+      $main::splash_screen->destroy()
+   }
+
+}
+
+sub colour_menu {
+
+   my($file_mb_ref, $text, $col_ref) = @_;
+
+   $$file_mb_ref->cascade(-label=>$text);
+
+   my $col_men = $$file_mb_ref->cget(-menu);
+   my $colour_cols = $col_men->Menu;
+
+   # Now pick up all the lovely colours and build a radiobutton
+   
+   $$file_mb_ref->entryconfigure($text,-menu=>$colour_cols);
+   open(COLOUR_FILE, "$FindBin::RealBin/txt/colours.txt");
+   while(<COLOUR_FILE>){
+      chomp;
+      eval {
+         $colour_cols->radiobutton(
+            -label=>$_,-background=>$_,
+            -command=>[ sub {main::bc_upd()}],
+            -variable=>$col_ref,
+            -value=>$_);
+      };
+   }
+   close(COLOUR_FILE);
 }
 
 # EOF

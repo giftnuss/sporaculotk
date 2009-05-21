@@ -3,7 +3,7 @@ use strict;
 
 @orac_Sybase::ISA = qw{orac_Base};
 
-my @dbs;
+my @dbs = ();
 my $cur_db;
 my $sql_text;
 
@@ -50,6 +50,9 @@ my $obj;
 my $col_count;
 my $sql_txt;
 
+my $defSegFreeSpace;
+my $reqdIndSpace;
+
 sub new
 {
    my $proto = shift;
@@ -71,7 +74,7 @@ sub init2 {
    my $self = shift;
    $self->{Database_conn} = $_[0];
    $self->Dump;
-   @dbs= ();
+   @dbs = ();
    my $cm = $self->f_str('get_db','1');
    my $sth = $self->{Database_conn}->prepare($cm) || 
                  die $self->{Database_conn}->errstr;
@@ -92,6 +95,7 @@ sub add_cascade_button {
     for (@_) {
 	/^tbl_rev$/ && do { $cmd_menu = '$main::current_db->syb_reverse_tbl("'; next;};
 	/^diag_ind$/ && do { $cmd_menu = '$main::current_db->syb_bad_index("'; next;};
+	/^frag_ind$/ && do { $cmd_menu = '$main::current_db->syb_tune("';next;};
 	/.*?/ && do { return;} ;
     }
 
@@ -235,7 +239,7 @@ sub do_a_generic {
 
    my ($l_mw, $l_gen_sep, $l_hlst, $input) = @_;
 
-   $l_mw->Busy;
+   $l_mw->Busy(-recurse=>1);
    my $owner;
    my $generic;
    my $dum;
@@ -277,19 +281,21 @@ sub do_a_generic {
    $window->title ("$l_hlst $main::lg{sql_for} $owner.$generic");
 
    if ( ($l_hlst eq 'Tables') || 
-        ($l_hlst eq 'System Tables') ||
-        ($l_hlst eq 'Views') )
+       ($l_hlst eq 'System Tables') ||
+       ($l_hlst eq 'Views') ||
+       ($l_hlst eq 'Procedures') ||
+       ($l_hlst eq 'Triggers'))
    {
       $self->create_balloon_bars(\$menu_bar, \$balloon, \$window );
 
       foreach my $bit ('sizeindex', 
-                      'form', 
-                      'freespace',
-                      'index',
-                      'constraint',
-                      'trig',
-                      'comment',
-                     )
+		       'form', 
+		       'freespace',
+		       'index',
+		       'constraint',
+		       'trig',
+		       'comment',
+		       )
       {
          $b_images{$bit} = $window->Photo( 
             -file => "$FindBin::RealBin/img/${bit}.gif" );
@@ -354,7 +360,7 @@ sub do_a_generic {
        
        $b = $menu_bar->Button(-image=>$b_images{form},
 			      -command=>
-			      sub{$window->Busy;
+			      sub{$window->Busy(-recurse=>1);
 				  $self->univ_form($window,$owner,$generic,'form');
 				  $window->Unbusy }
 			      )->pack(-side=>'left');
@@ -363,17 +369,38 @@ sub do_a_generic {
        $i++;
        
        $b =  $menu_bar->Button(-image=>$b_images{sizeindex},
-			       -command=> sub{$window->Busy;
+			       -command=> sub{$window->Busy(-recurse=>1);
 					      $self->univ_form($window,$owner,$generic,'index');
 					      $window->Unbusy }
 			       )->pack(-side=>'left');
        
        $balloon->attach($b, -msg => $main::lg{build_index});
        print L_TEXT " ";
+   } elsif($l_hlst eq 'Procedures' || $l_hlst eq 'Triggers') {
+       $window->{ed_button} = $menu_bar->Button(-image=>$b_images{form},
+			     -command=>sub{
+				 $window->{text}->configure(-state=>'normal');
+				 $window->{rc_button}->configure(-state=>'normal');
+				 $window->{ed_button}->configure(-state=>'disabled');
+			     }
+			     )->pack(-side=>'left');
+       $balloon->attach($window->{ed_button}, -msg => 'Edit');
+       
+       $window->{rc_button} =  $menu_bar->Button(-image=>$b_images{sizeindex},
+			       -command=> sub{$window->Busy(-recurse=>1);
+					      $window->{text}->configure(-state=>'disabled');
+					      $window->{rc_button}->configure(-state=>'disabled');
+					      $window->{ed_button}->configure(-state=>'normal');
+					      $self->change_sql($window,$generic, $l_hlst);
+					      $window->Unbusy },
+			       -state=>'disabled'
+			       )->pack(-side=>'left');
+       
+       $balloon->attach($window->{rc_button}, -msg => 'Recompile');
    } elsif ($l_hlst eq 'Views'){
       print L_TEXT "\n\n  ";
       $b = menu_bar->Button(-text=>$main::lg{form},
-			    -command=>sub{$window->Busy; 
+			    -command=>sub{$window->Busy(-recurse=>1); 
 					  $self->univ_form($window,$owner,$generic,'form');
 					  $window->Unbusy }
 			    )->pack(-side=>'left');
@@ -382,8 +409,22 @@ sub do_a_generic {
    
    print L_TEXT "\n\n";
    $self->window_exit_button(\$menu_bar, \$window );
+   $window->{text}->configure(-state=>'disabled');
    main::iconize( $window );
    $l_mw->Unbusy;
+}
+
+sub change_sql {
+    my $self = shift;
+    
+    my ($loc_d,$obj,$l_hlst) = @_;
+
+    chop $l_hlst;
+    my $sp_text = $loc_d->{text}->get("1.0", "end"); 
+    my $drop_sql = qq{ drop $l_hlst $obj };
+    $self->{Database_conn}->do($drop_sql);
+    $self->{Database_conn}->do($sp_text);
+    return;
 }
 
 sub explain_plan {
@@ -407,22 +448,22 @@ sub explain_plan {
 
    my $expl_butt = $dmb->Button(-text=>$main::lg{explain},
 				-command=>sub{ $self->explain_it();}
-				)->pack(side=>'left');
+				)->pack(-side=>'left');
 
    $dmb->Button(-text=>$main::lg{clear},
 		-command=>sub{
-                      $window->Busy;
+                      $window->Busy(-recurse=>1);
                       $sql_txt->delete('1.0','end');
                       my $w_user_name = $main::v_sys;
                       $expl_butt->configure(-state=>'normal');
                       $window->Unbusy;
 		  }
-               )->pack(side=>'left');
+               )->pack(-side=>'left');
 
    $dmb->Button(-text=>$main::lg{exit},
 		-command=> sub{
                       $window->destroy();
-                      $window->Busy;
+                      $window->Busy(-recurse=>1);
  		      my $cm = $self->f_str('explain_plan','3');
 		      $self->{Database_conn}->do($cm);
 		      $cm = $self->f_str('explain_plan','4');
@@ -521,13 +562,12 @@ sub explain_it {
    my $sth = $self->{Database_conn}->prepare( $cm ) ||
                die $self->{Database_conn}->errstr; 
    $sth->execute;
-
+ 
    # Clear screen where required.
    $self->f_clr( $main::v_clr );
 
    # Now clean up the output since it actually believes
    # that the execution has failed
-   
    $main::store_msgs =~ s/^(.*?)text=//mg;
    $main::store_msgs =~ s/^\s//g;
    $main::store_msgs =~ s/go//mig;
@@ -535,6 +575,24 @@ sub explain_it {
    undef($main::store_msgs);
    $sth->finish;
    $self->see_plsql( $cm );
+}
+
+sub dbcc_memusage {
+    my $self = shift;
+    my (@row, @result);
+    $main::conn_comm_flag = 999;
+    $self->f_clr( $main::v_clr );
+
+    $self->{Database_conn}->do("dbcc traceon (3604)");
+    undef($main::store_msgs);
+    $self->{Database_conn}->do("dbcc memusage");
+    # Clean all those extra new lines
+    $main::store_msgs =~ s/\n$//mg;
+    $main::store_msgs =~ s/(.*?)Buffer Cache Memory(.*?)/$1\n\nBuffer Cache Memory$2/mg;
+    $main::store_msgs =~ s/(.*?)Procedure Cache(.*?)/$1\n\nProcedure Cache$2/mg;
+    $self->{Text_var}->insert('end', $main::store_msgs);
+    undef($main::store_msgs);
+    undef($main::conn_comm_flag);
 }
 
 # Undocumented and dangerous !!!!!!!!!!
@@ -545,7 +603,7 @@ sub dbcc_pss {
     my (@row, @result);
     $main::conn_comm_flag = 999;
     $self->f_clr( $main::v_clr );
-    my $cm = 'select distinct spid, suid, suser_name(suid) from master..sysprocesses where suid > 0';
+    my $cm = 'select distinct spid, suid, suser_name(suid), hostname, program_name, hostprocess  from master..sysprocesses where suid > 0';
     my $sth = $self->{Database_conn}->prepare($cm) ||
 	       die $self->{Database_conn}->errstr; 
     $sth->execute;
@@ -555,10 +613,14 @@ sub dbcc_pss {
     $sth->finish;
     $self->{Database_conn}->do("dbcc traceon (3604)");
 
-    my ($suid, $spid, $uname, @tempArray, @tempArray2);
+    my ($suid, $spid, $uname, $host, $program, $hpid, @tempArray, @tempArray2);
     for (@result) {
-	($spid, $suid, $uname) = split(/:/, $_);
-	$self->{Text_var}->insert('end', "SQL executed by $uname (Session ID $spid): \n\n");
+	($spid, $suid, $uname, $host, $program, $hpid) = split(/:/, $_);
+	$hpid =~ s/\s*//g;
+	$self->{Text_var}->insert('end', "SQL executed by $uname (Session ID $spid): \n");
+	$host = ($host =~ //) ? 'DB Host' : $host;
+	$program = ($program =~ //) ? 'Unknown Application' : $program;
+	$self->{Text_var}->insert('end', "Hostname: $host , Program: $program (Process ID $hpid): \n\n");
 	undef($main::store_msgs);
 	$self->{Database_conn}->do("dbcc pss ($suid, $spid, 0)");
 	@tempArray =  split(/T-SQL command \(may be truncated\):/, $main::store_msgs);
@@ -1831,7 +1893,7 @@ sub univ_form {
    }
 
    $bb->Button( -text=>$uf_txt,
-                -command=>sub{ $bd->Busy;
+                -command=>sub{ $bd->Busy(-recurse=>1);
                                $self->selector($bd,$uf_type);
                                $bd->Unbusy}
               )->pack (-side=>'right', 
@@ -1953,12 +2015,12 @@ sub and_finally {
                 sub {   $self->calc_scale_record($gen_sc->get())
                     }  ]
 
-                     )->pack(side=>'left');
+                     )->pack(-side=>'left');
 
       $c_br->Button(-text=>$main::ssq,
                     -command=>sub{$self->see_sql($c_d,$l_sel_str)}
 
-                   )->pack(side=>'right');
+                   )->pack(-side=>'right');
 
       $self->go_for_gold();
       $c_d->Show;
@@ -2039,7 +2101,7 @@ sub really_build_index {
 
    $d->add( "Label",
             -text=>"$main::lg{ind_crt_for} $own.$obj"
-          )->pack(side=>'top');
+          )->pack(-side=>'top');
 
    my $l_text = $d->Scrolled( 'Text',
                               -wrap=>'none',
@@ -2505,5 +2567,209 @@ sub do_query_fetch_all
 
    return ($tbl_ary_ref, @temp);
 }
-1;
 
+sub syb_tune {
+    my $self = shift;
+
+    my($db) = @_;
+
+    $self->{Database_conn}->do("use $db");
+    $self->get_free_segspace;
+
+    # Get all tables with the exception of proxies
+    my $cm = $self->f_str('get_user_objects','1');
+    my $sth = $self->{Database_conn}->prepare($cm) || die $self->{Database_conn}->errstr;
+    $sth->execute;
+    my (%tables, %dupTables);
+    my @row = ();
+    while(@row = $sth->fetchrow){
+	$tables{$row[1].".".$row[0]} = $row[1];
+    }
+    $sth->finish;
+
+    for (sort keys %tables) {
+	$self->gen_frag_indexes($_,$tables{$_});
+    }
+#    $self->show_sql('fragindex','1',$main::lg{diag_ind});
+}
+
+sub gen_frag_indexes {
+    my $self = shift;
+    my ($tableLocal, $ownerLocal) = @_;
+
+    $tableLocal =~ s/^.*?\.//g;
+    my $tblString = ($ownerLocal eq 'dbo') ? $tableLocal : "\"$ownerLocal.$tableLocal\"";
+    my ($drop_line, $crt_line);
+    my $ind_name;
+    my $type;
+    my $cm = "sp__fragindex ".$tblString.", 1";
+
+    # The constraints and indexes
+    my $sth = $self->{Database_conn}->prepare($cm) || die $self->{Database_conn}->errstr;
+    $sth->execute;
+    do {
+	while(my $row = $sth->fetchrow){
+	    $row =~ s/go//g; #remove every go statement
+	    if (($row =~ /^DROP (\w+)\s+$tableLocal\.(.+)/) ||
+	        ($row =~ /^DROP (\w+)\s+$ownerLocal.$tableLocal\.(.+)/) || 
+                ($row =~ /^ALTER TABLE $ownerLocal\.$tableLocal DROP (\w+) (.*?)$/)){
+		$type = $1;
+		$ind_name = $2;
+		$ind_name =~ s/\s//g;
+		if ($row =~ /ALTER.*/ && $ownerLocal eq 'dbo') {
+		    $row =~ s/ $ownerLocal\./ /g;
+		} elsif ($row =~/DROP.*/) {
+		    $row =~ s/ $ownerLocal\./ /g;
+		}
+			
+		$drop_line = $row;
+	    } else {
+		if ($row =~ /ALTER.*/ && $ownerLocal eq 'dbo') {
+		    $row =~ s/ $ownerLocal\./ /g;
+		}
+		$crt_line = $row;
+	    }
+	    
+	}
+    } while($sth->{syb_more_results});
+    $sth->finish;
+    $self->est_index_size($tableLocal, $ownerLocal);
+    $self->gen_sql_script($tableLocal, $ownerLocal, $ind_name, $type, $crt_line, $drop_line) if ($ind_name ne '');
+}
+
+sub get_free_segspace {
+    my $self = shift;
+
+    # we'll hardcode the default
+    my $cm = $self->f_str('free_space_segment','1');
+    my $sth = $self->{Database_conn}->prepare($cm) || die $self->{Database_conn}->errstr;
+
+    $sth->execute;
+    # The return is a complete overkill but just in case ...
+    # Total size(MB), total pages, free pages, used pages, free(MB), free(%), used(MB), used(%)
+    while(my @row = $sth->fetchrow){
+	$defSegFreeSpace = $row[4];
+    }
+    $sth->finish;
+}
+
+sub est_index_size {
+    my $self = shift;
+    my ($table, $owner) = @_;
+
+    my $cm = "sp_spaceused \"$owner.$table\"";
+    my $sth = $self->{Database_conn}->prepare($cm) || die $self->{Database_conn}->errstr;
+
+    $sth->execute;
+    while(my @row = $sth->fetchrow){
+	$reqdIndSpace = $row[3] * 1.2 / 1024;
+    }
+    $sth->finish;
+}
+
+sub gen_sql_script {
+    my $self = shift;
+    my($table, $owner, $ind_name, $type, $crt_stmt, $drop_stmt) = @_;
+
+    my $cm = "select db_name()";
+
+    my $sth = $self->{Database_conn}->prepare( $cm ) || die $self->{Database_conn}->errstr; 
+    $sth->execute;
+    my $db = $sth->fetchrow;
+    $sth->finish;
+
+    if ($ind_name eq '__ORAC_TEST__') {
+	$crt_stmt =~ s/80/99/g;
+	$self->{Text_var}->insert('end', qq{
+	/*
+	 * Defragment by rebuilding clustered index: $owner.$table.$ind_name
+	 */
+       IF 1=1 
+       BEGIN
+	    IF EXISTS (SELECT * FROM sysindexes WHERE id = OBJECT_ID('$owner.$table') AND (status & 16) != 0 AND name='$ind_name')
+	BEGIN
+		RAISERROR 70001 '<<< CLUSTERED INDEX FOR TABLE $owner.$table ALREADY EXISTS >>>'
+	END
+	ELSE
+	BEGIN
+		DECLARE \@req_size int, \@avail_seg_space int
+		/* Make sure space exists to rebuild clustered index */
+		SELECT \@req_size = $reqdIndSpace
+ 	        SELECT \@avail_seg_space = $defSegFreeSpace
+		IF \@avail_seg_space >= \@req_size
+		BEGIN
+		       $crt_stmt
+		       IF EXISTS (SELECT * FROM sysindexes WHERE id=OBJECT_ID('$owner.$table') AND (status & 16) != 0 AND name='$ind_name')
+		        BEGIN
+				PRINT '<<< CREATED CLUSTERED INDEX $owner.$table.$ind_name >>>'
+			END
+			ELSE
+			BEGIN
+				RAISERROR 70005 '<<< FAILED CREATING CLUSTERED INDEX $owner.$table.$ind_name >>>'
+			END
+			EXEC sp_cachestrategy '$db','$owner.$table','$ind_name','prefetch','on'
+			EXEC sp_cachestrategy '$db','$owner.$table','$ind_name','mru','on'
+
+		        $drop_stmt
+			IF EXISTS (SELECT * FROM sysindexes WHERE id=OBJECT_ID('$owner.$table') AND (status & 16) != 0 AND name='$ind_name')
+				RAISERROR 81003 '<<< FAILED DROPPING INDEX $owner.$table.$ind_name >>>'
+			ELSE
+				PRINT '<<< DROPPED INDEX $owner.$table.$ind_name >>>'
+		END
+		ELSE
+			RAISERROR 81006 '<<< NOT ENOUGH AVAILABLE SPACE TO REBUILD CLUSTERED INDEX $owner.$table.$ind_name >>>'
+	END
+       END
+    });
+   } else {
+	$self->{Text_var}->insert('end', qq{
+	/*
+	 * Defragment by rebuilding clustered index: $owner.$table.$ind_name
+	 */
+        IF 1=1 
+	    BEGIN
+	      IF NOT EXISTS (SELECT * FROM sysindexes WHERE id = OBJECT_ID("$owner.$table") AND (status & 16) != 0 AND name="$ind_name")
+	       BEGIN
+		RAISERROR 70001 '<<< CLUSTERED INDEX FOR TABLE $owner.$table DOES NOT EXIST >>>'
+               END
+	      ELSE
+	       BEGIN
+		DECLARE \@req_size int, \@avail_seg_space int
+
+		/* Make sure space exists to rebuild clustered index */
+		SELECT \@req_size = $reqdIndSpace
+		SELECT \@avail_seg_space = $defSegFreeSpace
+
+		IF \@avail_seg_space >= \@req_size
+		BEGIN
+			/* Drop index */
+			$drop_stmt
+			IF EXISTS (SELECT * FROM sysindexes WHERE id=OBJECT_ID('$owner.$table') AND (status & 16) != 0 AND name='$ind_name')
+				RAISERROR 70002 '<<< FAILED DROPPING $type $owner.$table.$ind_name >>>'
+			ELSE
+				PRINT '<<< DROPPED $type $owner.$table.$ind_name >>>'
+
+			/* Rebuild primary key */
+			$crt_stmt
+			IF EXISTS (SELECT * FROM sysindexes WHERE id=OBJECT_ID('$owner.$table') AND (status & 16) != 0 AND name='$ind_name')
+			BEGIN
+				PRINT '<<< CREATED $type $owner.$table.$ind_name >>>'
+			END
+			ELSE
+			BEGIN
+				RAISERROR 81004 '<<< FAILED CREATING $type $owner.$table.$ind_name >>>'
+			END
+			EXEC sp_cachestrategy '$db','$owner.$table','$ind_name','prefetch','on'
+			EXEC sp_cachestrategy '$db','$owner.$table','$ind_name','mru','on'
+
+		END
+		ELSE
+			RAISERROR 81006 '<<< NOT ENOUGH AVAILABLE SPACE TO REBUILD $type $owner.$table.$ind_name >>>'
+            	END
+        END
+     });
+    }
+    $self->{Text_var}->insert('end', "\ngo\n\n");
+}
+
+1;

@@ -31,6 +31,9 @@ use File::Basename;
 
 @orac_Monitor::ISA = qw{orac_Base};
 
+# set this to how many seconds you want between updates to the progress bar
+my $countdown_amount = 1.0;
+
 use vars qw();
 
 =head2 new
@@ -1064,7 +1067,7 @@ sub run_the_startup {
 
    # Run some checking Baby!
 
-   $self->{mon_win}->Busy;
+   $self->{mon_win}->Busy(-recurse=>1);
 
    $self->check_the_monitor;
 
@@ -1072,8 +1075,8 @@ sub run_the_startup {
 
    while($$stop_ref)
    {
-      select(undef, undef, undef, 0.1);
-      $$countdown_ref = $$countdown_ref - 0.1;
+      select(undef, undef, undef, $countdown_amount);
+      $$countdown_ref = $$countdown_ref - $countdown_amount;
 
       my $countdown_bit = sprintf("%5.2f", $$countdown_ref);
       $$mon_text_ref = 'T-minus ' . $countdown_bit . ' (secs)';
@@ -1088,7 +1091,7 @@ sub run_the_startup {
          last;
       }
 
-      if (($$stop_ref) && ($$countdown_ref <= 0.05))
+      if (($$stop_ref) && ($$countdown_ref <= 0.05)) # $countdown_amount/2 ?
       {
          $$mon_text_ref = 'Initialising...';
 
@@ -1170,6 +1173,10 @@ sub check_the_monitor {
 
    foreach my $db ( keys(%{$self->{nm}} ))
    {
+      # we actually need to reconnect every time;
+      # if we don't how else does this flag get updated?
+      # we can force this by disconnecting below.  kevinb
+
       if (not (defined ( $self->{nm}->{$db}->{connect} )))
       {
          # Unlike main program, to avoid ENV variables
@@ -1180,6 +1187,7 @@ sub check_the_monitor {
 
          $main::conn_comm_flag = 1;
 
+#print STDERR "check_the_monitor about to get a connection...\n";
          my $data_source_1 = 'dbi:' .
                              $main::orac_curr_db_typ .
                              ':' .
@@ -1205,6 +1213,7 @@ sub check_the_monitor {
          # and set blank (white) for everything else, as we do
          # not know whether they are good, bad or ugly.
 
+#print STDERR "check_the_monitor going red on $db...\n";
          $self->shutdown_db($db);
 
       } else {
@@ -1214,6 +1223,7 @@ sub check_the_monitor {
          $self->{nm}->{$db}->{labf}->{flag}->{up}->configure(
                                              -image=> $self->{ball}->{green}
                                                             );
+#print STDERR "check_the_monitor going green on $db...\n";
 
          # Now run through the rest of the checks required,
          # and set flags accordingly.
@@ -1232,6 +1242,17 @@ sub check_the_monitor {
                last;
             }
          }
+      }
+      if ($self->{Database_type} eq "Informix")
+      {
+	 # disconnect, this will force us to reconnect next time in, KevinB
+	 # required for everyone but Oracle?
+	 if (defined ( $self->{nm}->{$db}->{connect} ))
+	 {
+#print STDERR "check_the_monitor about to disconnect...\n";
+	    $self->{nm}->{$db}->{connect}->disconnect;
+	    $self->{nm}->{$db}->{connect} = undef;
+	 }
       }
    }
    return;
@@ -1258,43 +1279,34 @@ sub base_connector {
 sub shutdown_db {
 
    my $self = shift;
-
    my ($database) = @_;
 
    my $colour;
 
    foreach my $key ( keys(%{$self->{nm}->{$database}->{labf}->{flag}} ))
    {
-      if ($key eq 'up')
-      {
-         $colour = 'red';
+      if ($key eq 'up') { $colour = 'red' } else { $colour = 'white' }
 
-         $self->{nm}->{$database}->{labf}->{flag}->{up}->{errstr} =
-
-            $database . ' ' . 'up' . ' ' . 'flag' . "\n\n" .
-            'Last Possible Error? : ' . $DBI::errstr;
-
-      } else {
-
-         $colour = 'white';
-         $self->{nm}->{$database}->{labf}->{flag}->{$key}->configure(
-                                                           -state=> 'disabled'
-                                                                    );
-      }
       $self->{nm}->{$database}->{labf}->{flag}->{$key}->configure(
-
+                                    #-state=> 'disabled',
                                     -image=> $self->{ball}->{$colour},
-
-                                                           );
+                                                                 );
+      if ($self->{Database_type} eq "Informix")
+      {
+	 # try to change the text, but doesn't seem to work for me, KevinB
+	 if ($self->{labs_req}->{value} eq 'Y')
+	 {
+	    $self->{nm}->{$database}->{labf}->Label( -text=> ($colour eq "red" ? "down" : "neutral"),
+						   );
+	 }
+      }
    }
-
    if (defined($self->{nm}->{$database}->{connect}))
    {
       $self->{nm}->{$database}->{connect} = undef;
    }
    return;
 }
-
 sub refresh_the_monitor {
 
    my $self = shift;

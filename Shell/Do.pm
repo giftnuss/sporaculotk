@@ -5,14 +5,20 @@
 #
 
 package Shell::Do;
+use strict;
+
+use Exporter ();
+use vars qw(@ISA $VERSION);
+$VERSION = $VERSION = q{1.0};
+@ISA=('Exporter');
 
 sub do_prepare {
 	my ($self, $statement) = @_;
 	my $sth;
 
 	unless($statement) {
-		$self->{c}->{status} = -1;
-		$self->{c}->{msg} =  "Preparing a blank statement ... ? (doesn't work)";
+		$self->current->status(-1);
+		$self->current->msg("Preparing a blank statement ... ? (doesn't work)");
 		return undef;
 	}
 
@@ -23,11 +29,11 @@ sub do_prepare {
 	};
 	if ($@ or $DBI::err) {
 		my $err = $@;
-			$self->{c}->{status}  = $DBI::err;
+			$self->current->status($DBI::err);
 			# Use an error status, if eval error.
-			$self->{c}->{status}  = -1 unless $DBI::err;
-			$self->{c}->{msg} =  $err . $DBI::errstr;
-			return $self->{c}->{status};
+			$self->current->status(-1) unless $DBI::err;
+			$self->current->msg($err . $DBI::errstr);
+			return $self->current->status;
 	}
 	return $sth;
 }
@@ -41,7 +47,6 @@ sub sth_go {
 	if ($execute or !$sth->{Active}) {
 		my @params;
 		my $params = $sth->{NUM_OF_PARAMS} || 0;
-		print "Statement has $params parameters:\n" if $params;
 	  @params = $self->get_params($params) if $params;
 			eval {
 				$rv = $sth->execute(@params);
@@ -50,23 +55,23 @@ sub sth_go {
 				local $^W=0;
 				my $err = $@;
 				# Pick up the DBI error first.
-				$self->{c}->{status}  = $DBI::err;
+				$self->current->status($DBI::err);
 				# Use an error status, if eval error.
-				$self->{c}->{status}  = -1 unless $DBI::err;
-				$self->{c}->{msg} = "$err" . $DBI::errstr;
-				return $self->{c}->{status};
+				$self->current->status(-1) unless $DBI::err;
+				$self->current->msg("$err" . $DBI::errstr);
+				return $self->current->status;
 			}
 			return $rv if !defined($rv); 
-			$self->{c}->{display} = 1;
+			$self->current->display(1);
 	}
 	
 	if (!$sth->{'NUM_OF_FIELDS'}) { # not a select statement
 		local $^W=0;
 		$rv = "undefined number of" unless defined $rv;
 		$rv = "unknown number of"   if $rv == -1;
-		$self->{c}->{msg} = "[$rv row" . ($rv==1 ? "" : "s") . " affected]"; #"
-		$self->{c}->{display} = 0;
-		$self->{c}->{status} = 0;
+		$self->current->msg("[$rv row" . ($rv==1 ? "" : "s") . " affected]"); #"
+		$self->current->display(0);
+		$self->current->status(0);
 	}
 
 	$rv;
@@ -101,9 +106,10 @@ sub get_params {
 	my ($self, $num ) = @_;
 
 	my @val;
-	my $d = $self->{dbiwd}->Dialog( -title => 'Enter Parameters',
+	my $d = $self->dbiwd->Dialog( -title => 'Enter Parameters',
 	);
 
+	my $focus;
 	for my $x ( 1 .. $num ) {
 		my $f = $d->Frame()->pack( -side => 'top' );
 		my $l = $f->Label( -text => "Param: $x", 
@@ -112,8 +118,10 @@ sub get_params {
 		my $e = $f->Entry( -width => 20, -textvariable => \$val[$x - 1] );
 		$l->pack( -side => 'left' );
 		$e->pack( -side => 'right' );
+		$focus = $e if ($x == 1);
 	}
 
+	$focus->focus;
 	$d->Show;
 
 	return @val;

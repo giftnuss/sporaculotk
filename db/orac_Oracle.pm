@@ -4,6 +4,8 @@ use strict;
 @orac_Oracle::ISA = qw{orac_Base};
 
 my $Block_Size;
+my $Count_DBA_Tables;
+my $Oracle_Version;
 
 my $sql_slider;
 my $sql_row_count;
@@ -25,6 +27,37 @@ my @w_holders;
 my @w_titles;
 my @w_explain;
 
+my $oracle_dba_user;
+my $jpeg_user;   
+my $view;
+
+my %l_hlst_to_type =
+(
+  Comments         => 'comments',
+  Constraints      => 'constraint',
+  Functions        => 'function',
+  Indexes          => 'index',
+  Index_FreeSpace  => 'index',
+  Links            => 'database link',
+  PackageBods      => 'package body',
+  PackageHeads     => 'package',
+  Procedures       => 'procedure',
+  Profiles         => 'profile',
+  Roles            => 'role',
+  RoleGrants       => 'role',
+  Rollbacks        => 'rollback segment',
+  Sequences        => 'sequence',
+  SnapshotLogs     => 'snapshot log',
+  Snapshots        => 'snapshot',
+  Synonyms         => 'synonym',
+  Tables           => 'table',
+  Tablespaces      => 'tablespace',
+  Tab_FreeSpace    => 'table',
+  Users            => 'user',
+  UserGrants       => 'user',
+  Views            => 'view',
+);
+
 =head1 NAME
 
 orac_Oracle.pm - the Oracle module to the Orac tool
@@ -41,6 +74,7 @@ inherited and used as is.
 &new()
 &init1()
 &init2()
+&dba_user()
 
 =cut
 
@@ -100,7 +134,7 @@ sub init1 {
    }
 }
 
-=head2 init1
+=head2 init2
 
 Picks up a few values used again and again by the rest
 of the orac_Oracle object (eg: block size).
@@ -114,23 +148,98 @@ sub init2 {
    $self->{Database_conn} = $_[0];
    $self->Dump;
 
-   # Get the block size, as soon as we
-   # logon to a database.  Saves us having to
-   # continually find it out again, and again.
+   # Get the block size locally.
 
-   my $cm = $self->f_str('get_db','1');
+   my $cm = $self->f_str('get_user_db','1');
 
-   my $sth = $self->{Database_conn}->prepare( $cm ) ||
-                die $self->{Database_connector}->errstr;
+   my $sth = $self->{Database_conn}->prepare( $cm ); 
    $sth->execute;
    ($Block_Size) = $sth->fetchrow;
    $sth->finish;
 
+   # Get the Version locally
+
+   $cm = $self->f_str('get_version','1');
+
+   $sth = $self->{Database_conn}->prepare( $cm ); 
+   $sth->execute;
+   ($Oracle_Version) = $sth->fetchrow;
+   $sth->finish;
+
+   # Figure out if the user is a DBA somehow.  I'll default to user
+   # for now, until I can work out DBA status, later.
+
+   $view = 'USER';
+   $oracle_dba_user = 0;
+
+   eval {
+      $main::conn_comm_flag = 1;
+      $cm = $self->f_str('check_dba','1');
+
+      $sth = $self->{Database_conn}->prepare( $cm ); 
+      $sth->execute;
+      ($Count_DBA_Tables) = $sth->fetchrow;
+      $sth->finish;
+      $main::conn_comm_flag = 0;
+   };
+   if ($@) {
+      $view = 'USER';
+      $oracle_dba_user = 0;
+   } else {
+      $view = 'DBA';
+      $oracle_dba_user = 1;
+   }
+
+   $jpeg_user = 0;                
+   $main::conn_comm_flag = 1;    
+   eval {                       
+      require DBD::Chart;      
+      require Tk::JPEG;        
+   };                        
+   if ($@) {                
+      $jpeg_user = 0;      
+   } else {               
+      $jpeg_user = 1;    
+   }                    
+   $main::conn_comm_flag = 0; 
+
+   eval {
+      require DDL::Oracle;
+   };
+   if ($@) {
+      warn $@;
+      main::mes($main::mw,
+                   "Oracle Development usage requires\n" .
+                   "Richard Sutherland's DDL-Oracle module.\n" .
+                   "You can get hold of this here:\n\n" .
+                   "http://www.perl.com/CPAN-local/modules/" .
+                   "by-authors/id/R/RV/RVSUTHERL/"
+               );
+   } else {
+        DDL::Oracle->configure( 
+                  dbh      => $self->{Database_conn},
+                  resize   => 0,
+                  view     => $view,
+                  heading  => 0,
+                  prompt   => 0,
+                );
+   }
+
    # Enable the PL/SQL memory area, for this
    # database connection
-
+   
    $self->{Database_conn}->func(1000000,'dbms_output_enable');
 }
+
+sub dba_user {
+   my $self = shift;
+   return $oracle_dba_user;
+}
+
+sub jpeg_user {      
+   my $self = shift; 
+   return $jpeg_user;
+}                   
 
 ################ Database dependent code functions below here ##################
 
@@ -247,28 +356,112 @@ sub all_stf {
 
    my($module, $mod_number, $mod_binds) = @_;
 
-   my $cm = $self->f_str($module, $mod_number);
+   if ( 
+           $module eq 'Views'
+        or $module eq 'Synonyms'
+        or $module eq 'UserGrants'
+        or $module eq 'Constraints'
+      )
+   {
+     my $stmt;
 
-   my $sth = $self->{Database_conn}->prepare($cm) ||
+     if ( $module eq 'Constraints' )
+     {
+       $stmt =
+        "
+         SELECT
+                owner
+              , constraint_name
+         FROM
+                dba_constraints
+         ORDER
+            BY
+                1, 2
+        ";
+     }
+     elsif ( $module eq 'Views' )
+     {
+       $stmt =
+        "
+         SELECT
+                owner
+              , view_name
+         FROM
+                dba_views
+         ORDER
+            BY
+                1, 2
+        ";
+     }
+     elsif ( $module eq 'Synonyms' )
+     {
+       $stmt =
+        "
+         SELECT
+                owner
+              , synonym_name
+         FROM
+                dba_synonyms
+         ORDER
+            BY
+                1, 2
+        ";
+     }
+     elsif ( $module eq 'UserGrants' )
+     {
+       $stmt =
+        "
+         SELECT
+                null
+              , username
+         FROM
+                dba_users
+         ORDER
+            BY
+                username
+        ";
+     }
+  
+     my $sth = $self->{Database_conn}->prepare( $stmt ) ||
                 die $self->{Database_conn}->errstr;
-   my $i;
-   for ( $i = 1 ; $i <= $mod_binds ; $i++ ){
-      $sth->bind_param($i,'%');
+     $sth->execute;
+     my $aref = $sth->fetchall_arrayref;
+     $sth->finish;
+  
+     my $obj = DDL::Oracle->new(
+                                 type => $l_hlst_to_type{ $module },
+                                 list => $aref,
+                               );
+     my $text= $obj->create ;
+  
+     $self->{Text_var}->delete('1.0', 'end');
+     $self->{Text_var}->insert('end', "$text\n");
    }
-   $sth->execute;
+   else   # Not sure we still need this ???
+   {
+     my $cm = $self->f_str($module, $mod_number);
 
-   $i = 0;
-   my $ls;
-   while($i < 100000){
-      $ls = scalar $self->{Database_conn}->func('dbms_output_get');
-      if ((!defined($ls)) || (length($ls) == 0)){
-         last;
-      }
-      $self->{Text_var}->insert('end', "$ls\n");
-      $i++;
+     my $sth = $self->{Database_conn}->prepare($cm) ||
+                die $self->{Database_conn}->errstr;
+     my $i;
+     for ( $i = 1 ; $i <= $mod_binds ; $i++ ){
+        $sth->bind_param($i,'%');
+     }
+     $sth->execute;
+
+     $i = 0;
+     my $ls;
+     while($i < 100000){
+        $ls = scalar $self->{Database_conn}->func('dbms_output_get');
+        if ((!defined($ls)) || (length($ls) == 0)){
+           last;
+        }
+        $self->{Text_var}->insert('end', "$ls\n");
+        $i++;
+     }
+
+     $self->see_plsql($cm);
    }
-
-   $self->see_plsql($cm);
 }
 
 =head2 orac_create_db
@@ -542,6 +735,7 @@ sub univ_form {
 
    my $forward_b = $bb->Button( -image=>$image,
                                 -command=>sub{
+                               $univ_form_win->Busy(-recurse=>1);
                                $self->selector( \$univ_form_win,
                                                 \$screen_type,,
                                                 \$screen_title,
@@ -552,6 +746,7 @@ sub univ_form {
                                                 \@ordered_entry,
                                                 \@sql_entry,
                                               );
+                               $univ_form_win->Unbusy;
                                              }
                               )->pack (-side=>'left',
                                        -anchor=>'w');
@@ -789,7 +984,7 @@ sub and_finally {
                                                 )
                     }  ]
 
-                     )->pack(side=>'left');
+                     )->pack(-side=>'left');
 
       $self->go_for_gold( \$univ_scale,
                           \@output,
@@ -1495,6 +1690,7 @@ sub add_item {
    $c->create(   (   'text',
                      '0.4c',
                      "$y_start" . 'c',
+                     -fill=>$main::fc,
                      -anchor=>'nw',
                      -justify=>'left',
                      -text=>$this_text  ,
@@ -1509,6 +1705,7 @@ sub add_item {
       $c->create( ( 'text',
                     '5.2c',
                     "$y_start" . 'c',
+                     -fill=>$main::fc,
                     -anchor=>'nw',
                     -justify=>'left',
                      -font => $main::font{name},
@@ -1690,6 +1887,7 @@ sub dbwr_print_fileio {
       $c->create(   (   'text',
                         "$txt_name" . 'c',
                         "$txt_y_start" . 'c',
+                        -fill=>$main::fc,
                         -anchor=>'nw',
                         -justify=>'left',
                         -font => $main::font{name},
@@ -1701,6 +1899,7 @@ sub dbwr_print_fileio {
       $c->create(   (   'text',
                         "$act_figure_pos" . 'c',
                         "$txt_y_start" . 'c',
+                        -fill=>$main::fc,
                         -anchor=>'nw',
                         -justify=>'left',
                         -font => $main::font{name},
@@ -1715,6 +1914,7 @@ sub dbwr_print_fileio {
    $c->create(   (   'text',
                      "$x_start" . 'c',
                      "$txt_y_start" . 'c',
+                     -fill=>$main::fc,
                      -anchor=>'nw',
                      -justify=>'left',
                      -font => $main::font{name},
@@ -1782,7 +1982,7 @@ sub errors_orac {
    }
    $sth->finish;
    if($detected == 0){
-      $self->{Main_window}->Busy;
+      $self->{Main_window}->Busy(-recurse=>1);
       main::mes($self->{Main_window},$main::lg{no_rows_found});
       $self->{Main_window}->Unbusy;
    } else {
@@ -1791,7 +1991,7 @@ sub errors_orac {
 
       $window->{text}->bind(
          '<Double-1>',
-         sub{  $window->Busy;
+         sub{  $window->Busy(-recurse=>1);
                $self->selected_error(
                $window->{text}->get('active')
                                      );
@@ -1851,7 +2051,7 @@ sub dbas_orac {
    }
    $sth->finish;
    if($detected == 0){
-      $self->{Main_window}->Busy;
+      $self->{Main_window}->Busy(-recurse=>1);
       main::mes($self->{Main_window},$main::lg{no_rows_found});
       $self->{Main_window}->Unbusy;
    } else {
@@ -1861,8 +2061,8 @@ sub dbas_orac {
       $window->{text}->bind(
          '<Double-1>',
          sub{
-              $window->Busy;
-              $self->{Main_window}->Busy;
+              $window->Busy(-recurse=>1);
+              $self->{Main_window}->Busy(-recurse=>1);
 
               $self->univ_form( 'SYS',
                                 $window->{text}->get('active'),
@@ -1910,6 +2110,7 @@ sub addr_orac {
          my $balloon;
          $self->create_balloon_bars(\$addr_menu, \$balloon, \$window, );
          $self->window_exit_button(\$addr_menu, \$window, 1, \$balloon, );
+         $self->see_sql_but(\$addr_menu, \$window, \$cm, 1, \$balloon, );
          $self->double_click_message(\$window);
 
          my(@adr_lay) = qw/-side top -padx 5 -expand yes -fill both/;
@@ -1930,7 +2131,7 @@ sub addr_orac {
 
    if($detected == 0){
 
-      $self->{Main_window}->Busy;
+      $self->{Main_window}->Busy(-recurse=>1);
       main::mes($self->{Main_window},$main::lg{no_rows_found});
       $self->{Main_window}->Unbusy;
 
@@ -1987,6 +2188,7 @@ sub sids_orac {
          my $balloon;
          $self->create_balloon_bars(\$sid_menu, \$balloon, \$window, );
          $self->window_exit_button(\$sid_menu, \$window, 1, \$balloon, );
+         $self->see_sql_but(\$sid_menu, \$window, \$cm, 1, \$balloon, );
          $self->double_click_message(\$window);
 
          my(@sid_lay) = qw/-side top -padx 5 -expand yes -fill both/;
@@ -2005,7 +2207,7 @@ sub sids_orac {
    }
    $sth->finish;
    if($detected == 0){
-      $self->{Main_window}->Busy;
+      $self->{Main_window}->Busy(-recurse=>1);
       main::mes($self->{Main_window},$main::lg{no_rows_found});
       $self->{Main_window}->Unbusy;
    } else {
@@ -2014,15 +2216,19 @@ sub sids_orac {
 
       $window->{text}->bind(
          '<Double-1>',
-         sub { $window->Busy;
+         sub { $window->Busy(-recurse=>1);
 
                $self->f_clr( $main::v_clr );
-               my $sid_param = $window->{text}->get('active');
-               $self->show_sql( 'sel_sid' , '1',
-                                $main::lg{sel_sid} . ': ' . $sid_param,
-                                $sid_param );
 
-               $window->Unbusy}
+               # 5 jan 2000, Andre Seesink <Andre.Seesink@CreXX.nl>
+               # Now we get sid and username
+
+               my ($sid, $username) = split(' ',$window->{text}->get('active'));
+               $self->show_sql( 'sel_sid' , '1',
+                                $main::lg{sel_sid} . ': ' . $sid,
+                                $sid );
+               $window->Unbusy
+             }
                                      );
    }
 }
@@ -2144,7 +2350,7 @@ sub explain_plan {
 
       $expl_butt = $dmb->Button(-image=>$img,
                                 -command=>sub{ $self->explain_it(\$window) }
-                               )->pack(side=>'left');
+                               )->pack(-side=>'left');
 
       $balloon->attach($expl_butt, -msg => $main::lg{explain} );
 
@@ -2153,7 +2359,7 @@ sub explain_plan {
       my $clr_b = $dmb->Button(  -image=>$img,
                                  -command=>sub{
 
-                         $window->Busy;
+                         $window->Busy(-recurse=>1);
 
                          $w_explain[2]->delete('1.0','end');
                          $w_holders[0] = $main::v_sys;
@@ -2162,7 +2368,7 @@ sub explain_plan {
 
                          $window->Unbusy;
                                               }
-                              )->pack(side=>'left');
+                              )->pack(-side=>'left');
 
       $balloon->attach($clr_b, -msg => $main::lg{clear} );
    }
@@ -2304,7 +2510,7 @@ sub explain_plan {
             -tickinterval=>($sql_max_row/8),
             -command=>[ sub {$self->calc_scale_sql($sql_slider->get(),
                                                    $explain_ok)} ]
-                          )->pack(side=>'left');
+                          )->pack(-side=>'left');
 
       $self->see_sql_but(\$dmb, \$window, \$cm, 1, \$balloon, );
       $self->pick_up_sql($explain_ok);
@@ -2664,7 +2870,7 @@ sub who_hold
       $scroll_box->bind(
 
             '<Double-1>',
-            sub{  $self->{Main_window}->Busy;
+            sub{  $self->{Main_window}->Busy(-recurse=>1);
                   my @first_string = split(',', $scroll_box->get('active') );
 
                   my @v_osuser = split('\:', $first_string[1]);
@@ -2765,7 +2971,7 @@ sub mts_mem
       $scroll_box->bind(
 
             '<Double-1>',
-            sub{  $self->{Main_window}->Busy;
+            sub{  $self->{Main_window}->Busy(-recurse=>1);
                   my @stat_str = split('\:', $scroll_box->get('active') );
 
                   $self->who_what( 2,
@@ -2801,22 +3007,12 @@ sub do_a_generic {
 
    my ($l_mw, $l_gen_sep, $l_hlst, $input) = @_;
 
-   $l_mw->Busy;
+   $l_mw->Busy(-recurse=>1);
    my $owner;
    my $generic;
    my $dum;
 
    ($owner, $generic, $dum) = split("\\$l_gen_sep", $input);
-
-   my $cm = $self->f_str( $l_hlst , '99' );
-
-   $self->{Database_conn}->func(1000000, 'dbms_output_enable');
-   my $second_sth = $self->{Database_conn}->prepare( $cm ) ||
-      die $self->{Database_conn}->errstr;
-
-   $second_sth->bind_param(1,$owner);
-   $second_sth->bind_param(2,$generic);
-   $second_sth->execute;
 
    my $window = $self->{Main_window}->Toplevel();
 
@@ -2881,29 +3077,146 @@ sub do_a_generic {
 
    tie (*L_TEXT, 'Tk::Text', $window->{text} );
 
-   my $j = 0;
-   my $full_list;
+   my $cm;
 
-   my $consec_empty = 0;
+   if ( $l_hlst eq 'Refreshgroups' )
+   {
+     $cm = $self->f_str( $l_hlst , '99' );
 
-   while($j < 100000){
-      $full_list = scalar $self->{Database_conn}->func('dbms_output_get');
-      if ((!defined($full_list)) || (length($full_list) == 0)){
-         $consec_empty++;
-      }
-      else {
-         $consec_empty = 0;
-         $text_lines = $text_lines . "$full_list\n";
-      }
-      if ($consec_empty > 100){
-         last;
-      }
-      $j++;
+     $self->{Database_conn}->func(1000000, 'dbms_output_enable');
+     my $second_sth = $self->{Database_conn}->prepare( $cm ) ||
+        die $self->{Database_conn}->errstr;
+
+     $second_sth->bind_param(1,$owner);
+     $second_sth->bind_param(2,$generic);
+     $second_sth->execute;
+
+     my $j = 0;
+     my $full_list;
+
+     my $consec_empty = 0;
+
+     while($j < 100000){
+        $full_list = scalar $self->{Database_conn}->func('dbms_output_get');
+        if ((!defined($full_list)) || (length($full_list) == 0)){
+           $consec_empty++;
+        }
+        else {
+           $consec_empty = 0;
+           $text_lines = $text_lines . "$full_list\n";
+        }
+        if ($consec_empty > 100){
+           last;
+        }
+        $j++;
+     }
+   }
+   elsif (
+              $l_hlst eq 'Triggers'
+           or $l_hlst eq 'Tab_Indexes'
+           or $l_hlst eq 'Tab_Constraints'
+         )
+   {
+     my $stmt;
+     my $type;
+
+     if ( $l_hlst eq 'Triggers' )
+     {
+       $type = 'trigger';
+
+       $stmt =
+          "
+           SELECT
+                  '$owner'
+                , trigger_name
+           FROM
+                  ${view}_triggers
+           WHERE
+                  table_name = '$generic'
+          ";
+     }
+     elsif ( $l_hlst eq 'Tab_Indexes' )
+     {
+       $type = 'index';
+
+       $stmt =
+          "
+           SELECT
+                  '$owner'
+                , index_name
+           FROM
+                  ${view}_indexes
+           WHERE
+                  table_name = '$generic'
+          ";
+     }
+     elsif ( $l_hlst eq 'Tab_Constraints' )
+     {
+       $type = 'constraint';
+
+       $stmt =
+          "
+           SELECT
+                  '$owner'
+                , constraint_name
+           FROM
+                  ${view}_constraints
+           WHERE
+                  table_name = '$generic'
+          ";
+     }
+
+     if ( $view eq 'DBA' )
+     {
+       $stmt .=  "   AND  owner = '$owner'";
+     }
+
+     $stmt .=  "ORDER BY 2";
+
+     my $sth = $self->{Database_conn}->prepare( $stmt ) ||
+                die $self->{Database_conn}->errstr;
+     $sth->execute;
+     my $aref = $sth->fetchall_arrayref;
+     $sth->finish;
+
+     my $obj = DDL::Oracle->new(
+                                 type => $type,
+                                 list => $aref,
+                               );
+     $text_lines = $obj->create ;
+   }
+   else
+   {
+
+     my $obj = DDL::Oracle->new(
+                                 type => $l_hlst_to_type{ $l_hlst },
+                                 list => [
+                                           [
+                                             $owner,
+                                             $generic || $owner,
+                                           ]
+                                         ],
+                               );
+
+     if (
+             $l_hlst eq 'Tab_FreeSpace'
+          or $l_hlst eq 'Index_FreeSpace'
+        )
+     {
+       $text_lines = $obj->show_space ;
+     }
+     else
+     {
+       $text_lines = $obj->create ;
+     }
    }
 
    # Finally, pump out the monkey
 
+#here
    $window->{text}->insert('end', $text_lines);
+#   $self->{Text_var}->delete('1.0', 'end');
+#   $self->{Text_var}->insert('end', "$text_lines\n");
 
    $self->see_sql_but(\$menu_bar, \$window, \$cm, 1, \$balloon, );
 
@@ -2911,7 +3224,7 @@ sub do_a_generic {
 
                              -command=> sub{
 
-                         $window->Busy;
+                         $window->Busy(-recurse=>1);
 
                          my @lines_of_txt = split(/^/, $text_lines);
 
@@ -2945,7 +3258,7 @@ sub do_a_generic {
             my $b = $menu_bar->Button(-image=>$b_images{form},
                                      -command=> sub{
 
-                                  $window->Busy;
+                                  $window->Busy(-recurse=>1);
 
                                   $self->univ_form($owner,
                                                    $generic,
@@ -2962,7 +3275,7 @@ sub do_a_generic {
             $b = $menu_bar->Button( -image=>$b_images{sizeindex},
                                     -command=> sub {
 
-                              $window->Busy;
+                              $window->Busy(-recurse=>1);
                               $self->univ_form($owner,
                                                $generic,
                                                'index'
@@ -3021,7 +3334,7 @@ sub do_a_generic {
 
          my $b = $menu_bar->Button(
             -image=>$b_images{form},
-            -command=>sub{  $window->Busy;
+            -command=>sub{  $window->Busy(-recurse=>1);
 
                             $self->univ_form(  $owner,
                                                $generic,
@@ -3082,12 +3395,17 @@ sub tab_det_orac {
    my $sth = $self->{Database_conn}->prepare( $cm ) ||
                 die $self->{Database_conn}->errstr;
 
-   if($func eq 'tab_det_orac'){
-      my $i;
-      for ($i = 1;$i <= 6;$i++){
-         $sth->bind_param($i,$Block_Size);
-      }
-   }
+   # 3 jan 2000, Andre Seesink <Andre.Seesink@CreXX.nl>
+   # commented out, because we do not need this anymore
+   # the new tab_det_orac.1.sql does not need the blocksize anymore
+   #
+   #   if($func eq 'tab_det_orac'){
+   #      my $i;
+   #      for ($i = 1;$i <= 6;$i++){
+   #         $sth->bind_param($i,$Block_Size);
+   #      }
+   #   }
+
    $sth->execute;
 
    my $i = 1;
@@ -3120,10 +3438,14 @@ sub tab_det_orac {
      } else {
         ($T_Space,$Fname,$Total,$Used_Mg,$Free_Mg,$Use_Pct) = @res;
      }
-     if ((!defined($Used_Mg)) || (!defined($Use_Pct))){
-        $Used_Mg = 0.00;
-        $Use_Pct = 0.00;
-     }
+     # 3 jan 2000, Andre Seesink <Andre.Seesink@CreXX.nl>
+     # there will be no more variables undefined after we use the new 
+     # tab_det_orac.1.sql script
+     #
+     #     if ((!defined($Used_Mg)) || (!defined($Use_Pct))){
+     #        $Used_Mg = 0.00;
+     #        $Use_Pct = 0.00;
+     #     }
      $Grand_Total = $Grand_Total + $Total;
      $Grand_Used_Mg = $Grand_Used_Mg + $Used_Mg;
      if (defined($Free_Mg)){
@@ -3174,5 +3496,1386 @@ sub tab_det_orac {
    main::iconize( $d );
 
 }
+
+######################## Development ###########################################
+
+=head2 dev_tables
+
+Creates DBA Viewer window, for selecting various DBA_XXXX tables,
+which can then be selected upon.
+
+=cut
+
+sub dev_tables {
+   my $self = shift;
+   my ( $obj_type ) = @_;
+
+   # Creates Tables Viewer window
+
+   my $cm = $self->f_str('dev_tables',$obj_type);
+   my $sth = $self->{Database_conn}->prepare( $cm ) ||
+                die $self->{Database_conn}->errstr;
+   $sth->execute;
+   my $detected = 0;
+
+   if ($obj_type =~ /^PACKAGE_BODY$/){
+      $obj_type = 'PACKAGE BODY';
+   }
+
+   my @res;
+   my $window;
+
+   my $schema = 0;
+   my $prompt = 0;
+   my $resize = 0;
+   my $action = 'create';
+
+   my $text ;
+   my $current_index ;
+   my $blue_tag ;
+   my $purple_tag ;
+   my $red_tag ;
+   my $green_tag ;
+   my $eraser ;
+   my $b ;
+
+   while (@res = $sth->fetchrow) {
+      $detected++;
+
+      if($detected == 1){
+
+         $window = $self->{Main_window}->Toplevel();
+         $window->title($obj_type . " DDL");
+
+         my $dev_menu;
+         my $balloon;
+         $self->create_balloon_bars(\$dev_menu, \$balloon, \$window, );
+         $self->window_exit_button(\$dev_menu, \$window, 1, \$balloon, );
+
+         $eraser = $window->Photo(-file=>"$FindBin::RealBin/img/eraser.gif");
+ 	
+         $b = $dev_menu->Button(-image=>$eraser,
+                                -command=>sub{
+
+              $window->Busy(-recurse=>1);
+              $self->{Main_window}->Busy(-recurse=>1);
+
+              $text->delete('1.0','end');
+
+              $self->{Main_window}->Unbusy;
+              $window->Unbusy;
+                                             }
+
+                               )->pack(-side=>'right');
+
+         $balloon->attach($b, -msg => $main::lg{clear});
+
+         my $dev_2_menu;
+         my $balloon2;
+         $self->create_balloon_bars(\$dev_2_menu, \$balloon2, \$window, );
+
+         $self->double_click_message(\$window);
+
+         my $label1 = $dev_menu->Label(relief=>'ridge'
+                               )->pack (-side=>'left',
+                                        -anchor=>'w');
+
+         $label1->Radiobutton(variable=>\$prompt,
+                              text=>"Prompt Off",
+                              value=>0
+                             )->pack (-side=>'left',
+                                      -anchor=>'w');
+
+         $label1->Radiobutton(variable=>\$prompt,
+                              text=>"On",
+                              value=>1
+                             )->pack (-side=>'left',
+                                      -anchor=>'w');
+
+         my $label2 = $dev_menu->Label(relief=>'ridge'
+                               )->pack (-side=>'left',
+                                        -anchor=>'w');
+
+         $label2->Radiobutton(variable=>\$schema,
+                              text=>"Schema Off",
+                              value=>0
+                             )->pack (-side=>'left',
+                                      -anchor=>'w');
+
+         $label2->Radiobutton(variable=>\$schema,
+                              text=>"On",
+                              value=>1
+                             )->pack (-side=>'left',
+                                      -anchor=>'w');
+
+         my $resize_state = 'disabled';
+
+         if (($obj_type =~ /^TABLE$/) || ($obj_type =~ /^INDEX$/)) {
+            $resize_state = 'normal';
+         }
+
+         my $label3 = $dev_menu->Label(relief=>'ridge'
+                               )->pack (-side=>'left',
+                                        -anchor=>'w');
+
+         $label3->Radiobutton(variable=>\$resize,
+                              text=>"Extent Resize Off",
+                              value=>0,
+                              state=>$resize_state
+                             )->pack (-side=>'left',
+                                      -anchor=>'w');
+
+         $label3->Radiobutton(variable=>\$resize,
+                              text=>"On",
+                              value=>1,
+                              state=>$resize_state
+                             )->pack (-side=>'left',
+                                      -anchor=>'w');
+
+         $dev_2_menu->Radiobutton(variable=>\$action,
+                                  text=>"Create",
+                                  value=>'create'
+                                 )->pack (-side=>'left',
+                                          -anchor=>'w');
+
+         $dev_2_menu->Radiobutton(variable=>\$action,
+                                  text=>"Drop",
+                                  value=>'drop'
+                                 )->pack (-side=>'left',
+                                          -anchor=>'w');
+
+         $resize_state = 'disabled';
+
+         if ($Oracle_Version =~ /^8/){
+            if (($obj_type =~ /^TABLE$/) || ($obj_type =~ /^INDEX$/)) {
+               $resize_state = 'normal';
+            }
+         }
+
+         $dev_2_menu->Radiobutton(variable=>\$action,
+                                  text=>"Resize (Oracle 8 Tables & Indexes)",
+                                  value=>'resize',
+                                  state=>$resize_state
+                                 )->pack (-side=>'left',
+                                          -anchor=>'w');
+
+         my $compile_state = 'disabled';
+
+         if (($obj_type =~ /^FUNCTION$/) || 
+             ($obj_type =~ /^PACKAGE$/) ||
+             ($obj_type =~ /^PROCEDURE$/) ||
+             ($obj_type =~ /^TRIGGER$/) ||
+             ($obj_type =~ /^VIEW$/)
+            ) {
+            $compile_state = 'normal';
+         }
+
+         $dev_2_menu->Radiobutton(variable=>\$action,
+                                  text=>"Compile",
+                                  value=>'compile',
+                                  state=>$compile_state
+                                 )->pack (-side=>'left',
+                                          -anchor=>'w');
+
+
+         my $dev_top = $window->Frame( -relief => 'groove',
+                                     )->pack(-fill=>'both', 
+                                             -expand => 1,
+                                             -padx => 5,
+                                             -side => 'top' 
+                                            );
+
+
+         $window->{text} =
+            $dev_top->ScrlListbox(-width=>20,
+                                  -height => 18,
+                                  -font=>$main::font{name},
+                                  -background=>$main::bc,
+                                  -foreground=>$main::fc
+                                 )->pack(-side=>'left',
+                                         -expand=>'yes',-fill=>'both');
+
+         $text = $dev_top->Scrolled( "Text", 
+                                     -relief => 'groove',
+                                     -width => 40, 
+                                     -height => 18,
+                                     -cursor=>undef,
+                                     -foreground=>'black',
+                                     -background=>'white',
+                                     -font=>$main::font{name},
+                                     -wrap => "none",
+                                     -takefocus => 0,
+                                     -setgrid => 1
+                                   )->pack(-side=>'left',
+                                           -fill=>'both',
+                                           -expand=>'both'
+                                          );
+
+         $purple_tag = $text->tagConfigure("purple", -foreground =>"purple");
+         $blue_tag = $text->tagConfigure("blue", -foreground =>"blue");
+         $red_tag = $text->tagConfigure("red", -foreground =>"red");
+         $green_tag = $text->tagConfigure("green", -foreground =>"green");
+
+         my $adjuster1 = $dev_top->Adjuster();
+      
+         $adjuster1->packAfter(  $window->{text}, 
+                                 -side => 'left',
+                              );
+
+
+         main::iconize($window);
+      }
+      $window->{text}->insert('end', @res);
+   }
+   $sth->finish;
+   if($detected == 0){
+      $self->{Main_window}->Busy(-recurse=>1);
+      main::mes($self->{Main_window},$main::lg{no_rows_found});
+      $self->{Main_window}->Unbusy;
+   } else {
+
+      $window->{text}->selectionSet(0);
+      $window->{text}->pack();
+
+      $window->{text}->bind(
+         '<Double-1>',
+         sub{
+              $window->Busy(-recurse=>1);
+              $self->{Main_window}->Busy(-recurse=>1);
+
+              DDL::Oracle->configure( 
+                        dbh      => $self->{Database_conn},
+                        resize   => $resize,
+                        schema   => $schema,
+                        prompt   => $prompt,
+                        heading  => 0,
+                        view     => $view,
+                        blksize  => $Block_Size,
+                        version  => $Oracle_Version
+                      );
+
+              if ($obj_type =~ /^TABLE$/){
+                 $obj_type = 'TABLE FAMILY';
+              }
+
+              my $obj = DDL::Oracle->new(
+                            type  => $obj_type,
+                            list  => [
+                                       [
+                                         $main::v_sys,
+                                         $window->{text}->get('active'),
+                                       ]
+                                     ]
+                                        );
+
+              my $sql;
+
+              if ( $action eq "drop" ){
+                  $sql = $obj->drop;
+              }
+              elsif ( $action eq "create" ){
+                  $sql = $obj->create;
+              }
+              elsif ( $action eq "resize" ){
+                  $sql = $obj->resize;
+              }
+              elsif ( $action eq "compile" ){
+                  $sql = $obj->compile;
+              }
+
+              # What is the current mark?
+
+              $current_index = $text->index('current');
+
+              $text->insert('end', $sql . "\n\n");
+
+              $self->search_text(\$text, $current_index);
+
+	      $text->see( q{end linestart});
+
+              $self->{Main_window}->Unbusy;
+              $window->Unbusy;
+            }
+                                   );
+   }
+}
+
+=head2 dev_jpeg_tunen
+
+Creates various tuning pies and inserts them into a pop-up screen.
+
+=cut
+
+sub dev_jpeg_tunen {
+   my $self = shift;
+
+   # Creates Tables Viewer window
+
+   my $cm = $self->f_str('tune_health', 1);
+   my $sth = $self->{Database_conn}->prepare( $cm ) ||
+                die $self->{Database_conn}->errstr;
+   $sth->execute;
+
+   my @res;
+   my $window;
+
+   my $dbh;
+   my $rsth;
+   my $csth;
+
+   my $ratio;
+   my $anti_ratio;
+   my $real_ratio;
+
+   while (@res = $sth->fetchrow) {
+
+      $dbh = DBI->connect('dbi:Chart:');
+
+      $dbh->do('CREATE TABLE pie (label CHAR(30), ratio FLOAT)');
+      $csth = $dbh->prepare('INSERT INTO pie VALUES(?, ?)');
+
+      $real_ratio = $res[2];
+      $ratio = $real_ratio + 0.05;
+      $real_ratio = sprintf("%.2f", $real_ratio);
+      $ratio = sprintf("%.2f", $ratio);
+      $anti_ratio = 100.0 - $res[2];
+      $anti_ratio = sprintf("%.2f", $anti_ratio);
+
+      $csth->execute("", $ratio);
+      $csth->execute("", $anti_ratio);
+
+      $csth->finish;
+      $rsth = $dbh->prepare(
+         'SELECT PIECHART FROM pie ' .
+         'WHERE WIDTH=150 AND HEIGHT=150 ' .
+         'AND TITLE = \'' . $res[0] . ' ' . $real_ratio . '%\' ' .
+         'AND FORMAT=\'JPEG\' ' .
+         'AND 3-D=1 ' .
+         'AND SHOWVALUES=1 ' .
+         'AND COLOR=(purple, pink)');
+
+      # white, lgray, gray, dgray, black, 
+      # lblue, blue, dblue, gold, lyellow, yellow, 
+      # dyellow, lgreen, green. dgreen,
+      # lred, red, dred, lpurple, purple, 
+      # dpurple, lorange, orange, pink, 
+      # dpink, marine, cyan, lbrown, dbrown. 
+
+      my $buf;
+
+      $rsth->execute;
+      $rsth->bind_col(1, \$buf);
+      $rsth->fetch;
+      open OUTF, ">$main::orac_home/dev_jpeg_tunen." . $res[1] . ".jpeg";
+      binmode OUTF;
+      print OUTF $buf;
+      close OUTF;
+      $rsth->finish;
+      $dbh->do('DROP CHART pie');
+      $dbh->disconnect;
+   }
+   $sth->finish;
+
+   $window = $self->{Main_window}->Toplevel();
+   $window->title("Orac Hit Ratio Tuning Chart");
+
+   my $dev_menu;
+   my $balloon;
+   $self->create_balloon_bars(\$dev_menu, \$balloon, \$window, );
+   $self->window_exit_button(\$dev_menu, \$window, 1, \$balloon, );
+   $self->see_sql_but(\$dev_menu, \$window, \$cm, 1, \$balloon, );
+
+   my(@dev_lay) = qw/-side top -padx 5 -expand yes -fill both/;
+   my $dev_top = $window->Frame->pack(@dev_lay);
+
+   $window->{canv} =
+      $dev_top->Scrolled( 'Canvas',
+                          -relief=>'sunken',
+                          -bd=>2,
+                          -width=>540,
+                          -height=>360,
+                          -background=>$main::bc
+                        );
+   main::iconize($window);
+
+   my $x_offset = 10;
+   my $y_offset = 10;
+
+   for (1..5)
+   {
+      my $img = 
+         $window->{canv}->Photo( 
+                 -file => "$main::orac_home/dev_jpeg_tunen." . $_ . ".jpeg",
+                 -format => 'jpeg'
+                               );
+      $window->{canv}->create( 'image',$x_offset,$y_offset, 
+                               '-anchor' => 'nw', 
+                               '-image'  => $img );
+      
+      $window->{canv}->pack(-expand=>'yes',-fill=>'both');
+      $x_offset += 180;
+
+      if ($x_offset > 450){
+         $x_offset = 10;
+         $y_offset += 180;
+      }
+   }
+}
+
+=head2 dev_jpeg
+
+Creates various graphs and inserts them into a pop-up screen.
+
+=cut
+
+sub dev_jpeg {
+   my $self = shift;
+   my ( $graph_type ) = @_;
+
+   # Creates Tables Viewer window
+
+   my $cm = $self->f_str('dev_jpeg',$graph_type);
+   my $sth = $self->{Database_conn}->prepare( $cm ) ||
+                die $self->{Database_conn}->errstr;
+   $sth->execute;
+   my $detected = 0;
+
+   my @res;
+   my $window;
+
+   my $dbh;
+   my $rsth;
+   my $csth;
+   my $title_element;
+   my $x_axis;
+   my $y_axis;
+   my $show_values = 1;
+   my $three_d = 1;
+
+   my $flip_switch = 0;
+   my $hold1 = 0.0;
+
+   while (@res = $sth->fetchrow) {
+      $detected++;
+
+      if($detected == 1){
+
+         $dbh = DBI->connect('dbi:Chart:');
+
+         if (($graph_type =~ /^DBATABSPACE$/)) {
+            $show_values = 0;
+            $three_d = 0;
+            $dbh->do('CREATE TABLE bars (tabspace CHAR(30), Total FLOAT, '.
+                     'Used FLOAT, Free FLOAT)');
+            $csth = $dbh->prepare('INSERT INTO bars VALUES(?, ?, ?, ?)');
+         } else {
+            $dbh->do('CREATE TABLE bars (objtype CHAR(20), objcnt FLOAT)');
+            $csth = $dbh->prepare('INSERT INTO bars VALUES( ?, ?)');
+         }
+
+         $window = $self->{Main_window}->Toplevel();
+
+         if (($graph_type =~ /^OBJCNT$/)) {
+            $title_element = "User Objects";
+            $x_axis = "Object Type";
+            $y_axis = "Object Count";
+         } elsif (($graph_type =~ /^DBAOBJCNT$/)) {
+            $title_element = "DBA Objects";
+            $x_axis = "Object Type";
+            $y_axis = "Object Count";
+         } elsif (($graph_type =~ /^INVDBAOBJCNT$/)) {
+            $title_element = "All Invalid DBA Objects";
+            $x_axis = "Invalid Object Type";
+            $y_axis = "Invalid Object Count";
+         } elsif (($graph_type =~ /^ALLOBJCNT$/)) {
+            $title_element = "All Objects";
+            $x_axis = "Object Type";
+            $y_axis = "Object Count";
+         } elsif (($graph_type =~ /^INVALLOBJCNT$/)) {
+            $title_element = "All Invalid Objects";
+            $x_axis = "Invalid Object Type";
+            $y_axis = "Invalid Object Count";
+         } elsif (($graph_type =~ /^INVOBJCNT$/)) {
+            $title_element = "Invalid User Objects";
+            $x_axis = "Invalid Object Type";
+            $y_axis = "Invalid Object Count";
+         } elsif (($graph_type =~ /^DBATABSPACE$/)) {
+            $title_element = "TableSpace Allocations";
+            $x_axis = "TableSpace";
+            $y_axis = "Space Allocations (MB)";
+         } elsif (($graph_type =~ /^TABSPACE$/)) {
+            $title_element = "Free TableSpace";
+            $x_axis = "TableSpace";
+            $y_axis = "Free Space (MB)";
+         } else {
+            $title_element = $graph_type;
+            $x_axis = "X-Axis";
+            $y_axis = "Y-Axis";
+         }
+
+         $window->title("Orac " . $title_element . " Chart");
+
+         my $dev_menu;
+         my $balloon;
+         $self->create_balloon_bars(\$dev_menu, \$balloon, \$window, );
+         $self->window_exit_button(\$dev_menu, \$window, 1, \$balloon, );
+
+         my(@dev_lay) = qw/-side top -padx 5 -expand yes -fill both/;
+         my $dev_top = $window->Frame->pack(@dev_lay);
+
+         $window->{canv} =
+            $dev_top->Scrolled( 'Canvas',
+                                -relief=>'sunken',
+                                -bd=>2,
+                                -width=>730,
+                                -height=>330,
+                                -background=>$main::bc
+                              );
+         main::iconize($window);
+      }
+      if (($graph_type =~ /^DBATABSPACE$/)) {
+         if ($flip_switch){
+            $csth->execute($res[1], $hold1, $hold1 - $res[2], $res[2]);
+         } else {
+            $hold1 = $res[2];
+         }
+      } else {
+         $csth->execute($res[0], $res[1]);
+      }
+
+      if ($flip_switch){
+         $flip_switch = 0;
+      } else {
+         $flip_switch = 1;
+      }
+   }
+   $sth->finish;
+
+   if($detected == 0){
+      $self->{Main_window}->Busy(-recurse=>1);
+      main::mes($self->{Main_window},$main::lg{no_rows_found});
+      $self->{Main_window}->Unbusy;
+   } else {
+      $csth->finish;
+      $rsth = $dbh->prepare(
+         'SELECT BARCHART FROM bars ' .
+         'WHERE WIDTH=700 AND HEIGHT=300 ' .
+         'AND X-AXIS=\'' . $x_axis . 
+         '\' AND Y-AXIS=\'' . $y_axis . '\' AND ' .
+         'X-ORIENT=\'VERTICAL\' AND ' .
+         'FORMAT=\'JPEG\' AND ' .
+         'TITLE = \'' . $title_element . 
+         '\' AND 3-D=' . $three_d . ' ' .
+         'AND SHOWVALUES=' . $show_values . ' AND ' .
+         'COLOR=(lred, lgreen, lorange, marine, pink, yellow, lpurple)');
+
+         # white, lgray, gray, dgray, black, 
+         # lblue, blue, dblue, gold, lyellow, yellow, 
+         # dyellow, lgreen, green. dgreen,
+         # lred, red, dred, lpurple, purple, 
+         # dpurple, lorange, orange, pink, 
+         # dpink, marine, cyan, lbrown, dbrown. 
+      
+      my $buf;
+
+      $rsth->execute;
+      $rsth->bind_col(1, \$buf);
+      $rsth->fetch;
+      open OUTF, ">$main::orac_home/dev_jpeg.jpeg";
+      binmode OUTF;
+      print OUTF $buf;
+      close OUTF;
+      $rsth->finish;
+      $dbh->do('DROP CHART bars');
+      $dbh->disconnect;
+      
+      my $img = 
+         $window->{canv}->Photo( -file => "$main::orac_home/dev_jpeg.jpeg",
+                                 -format => 'jpeg');
+      $window->{canv}->create( 'image',5,5, 
+                               '-anchor' => 'nw', 
+                               '-image'  => $img );
+      
+      $window->{canv}->pack(-expand=>'yes',-fill=>'both');
+   }
+}
+
+=head2 dev_tablespace
+
+Creates DBA Viewer window, for selecting various tablespace,
+which can then be selected upon.
+
+=cut
+
+sub dev_tablespace {
+   my $self = shift;
+   my ( $obj_type ) = @_;
+
+   # Creates Tablespace Viewer window
+
+   my $cm = $self->f_str('dev_tablespace',$obj_type);
+   my $sth = $self->{Database_conn}->prepare( $cm ) ||
+                die $self->{Database_conn}->errstr;
+   $sth->execute;
+   my $detected = 0;
+
+   my @res;
+   my $window;
+
+   my $action = 'totalspace';
+
+   while (@res = $sth->fetchrow) {
+      $detected++;
+
+      if($detected == 1){
+
+         $window = $self->{Main_window}->Toplevel();
+         $window->title($obj_type . " Drilldown");
+
+         my $dev_menu;
+
+         my $balloon;
+         $self->create_balloon_bars(\$dev_menu, \$balloon, \$window, );
+         $self->window_exit_button(\$dev_menu, \$window, 1, \$balloon, );
+
+         $self->double_click_message(\$window);
+
+         $dev_menu->Radiobutton(variable=>\$action,
+                                text=>"Total Space",
+                                value=>'totalspace'
+                               )->pack (-side=>'left',
+                                        -anchor=>'w');
+
+         $dev_menu->Radiobutton(variable=>\$action,
+                                text=>"Tables Breakdown",
+                                value=>'tables'
+                               )->pack (-side=>'left',
+                                        -anchor=>'w');
+
+         $dev_menu->Radiobutton(variable=>\$action,
+                                text=>"Index Breakdown",
+                                value=>'indexes'
+                               )->pack (-side=>'left',
+                                        -anchor=>'w');
+
+         my(@dev_lay) = qw/-side top -padx 5 -expand yes -fill both/;
+         my $dev_top = $window->Frame->pack(@dev_lay);
+
+         $window->{canv} =
+            $dev_top->Scrolled( 'Canvas',
+                                -relief=>'sunken',
+                                -bd=>2,
+                                -width=>730,
+                                -height=>330,
+                                -background=>$main::bc
+                              );
+         $window->{text} =
+            $dev_top->ScrlListbox(-width=>50,
+                                  -font=>$main::font{name},
+                                  -background=>$main::bc,
+                                  -foreground=>$main::fc
+                                 )->pack(-expand=>'yes',-fill=>'both');
+
+         main::iconize($window);
+      }
+      $window->{text}->insert('end', @res);
+   }
+   $sth->finish;
+   if($detected == 0){
+      $self->{Main_window}->Busy(-recurse=>1);
+      main::mes($self->{Main_window},$main::lg{no_rows_found});
+      $self->{Main_window}->Unbusy;
+   } else {
+
+      $window->{text}->pack();
+
+      $window->{text}->bind(
+         '<Double-1>',
+         sub{
+              $window->Busy(-recurse=>1);
+              $self->{Main_window}->Busy(-recurse=>1);
+
+              # Function
+
+              if ( $action eq "totalspace" ){
+                 print "totalspace\n"; 
+              }
+              elsif ( $action eq "tables" ){
+                 print "tables\n"; 
+              }
+              elsif ( $action eq "indexes" ){
+                 print "indexes\n"; 
+              }
+
+              $self->{Main_window}->Unbusy;
+              $window->Unbusy;
+            }
+                                   );
+   }
+}
+
+sub search_text {
+   my ($self, $t, $curr) = @_;
+
+   my @blue_bits = ( 'ADD_MONTHS', 'ALTER', 'AND', 'AS', 'ASCII',
+                     'AVG', 'BEGIN', 'BIT_LENGTH', 'BLOCK', 'BODY',
+                     'CASE', 'CAST', 'CEIL', 'CHAR_LENGTH', 'CHR',
+                     'CLOSE', 'COMMIT', 'CONCAT', 'CONSTRAINT', 'CONVERT',
+                     'COUNT', 'CREATE', 'CURDATE','CURRENT_DATE','CURRENT_TIME',
+                     'CURRENT_TIMESTAMP', 'CURSOR', 'CURTIME', 'DATABASE', 
+                     'DAYOFMONTH',
+                     'DAYOFWEEK', 'DAYOFYEAR', 'DECLARATION', 'DECLARE',
+                     'DECODE', 'DELETE', 'END', 'EXCEPTION', 'EXCEPTION_INIT',
+                     'EXIT',
+                     'EXPLAIN', 'EXTRACT', 'FETCH', 'FLOOR', 'FOR',
+                     'FOUND', 'FUNCTION', 'GOTO', 'GRANT', 'GREATEST',
+                     'HINTS', 'HOUR', 'IF', 'IFNULL', 'INDEX',
+                     'INDICATOR', 'INITCAP', 'INSERT', 'INSTR', 'INSTRB',
+                     'INTERVAL', 'INTO', 'IS', 'ISOPEN', 'JAVA',
+                     'LABEL', 'LAST_DAY', 'LCASE', 'LEAST', 'LENGTH',
+                     'LENGTHB', 'LEVEL', 'LOCATE', 'LOCK', 'LOOP',
+                     'LOWER', 'LPAD', 'LTRIM', 'MAX', 'MIN',
+                     'MINUTE', 'MOD', 'MONTH', 'MONTHS_BETWEEN', 'NEXT_DAY',
+                     'NOTFOUND', 'NOW', 'NULL', 'NVL', 'OCTET_LENGTH',
+                     'OPEN', 'OR', 'PACKAGE', 'PLAN', 'POSITION',
+                     'PRAGMA', 'PROCEDURE', 'QUARTER', 'RAISE', 'RECORD',
+                     'REPLACE', 'REVOKE', 'ROLLBACK', 'ROUND', 'ROWCOUNT',
+                     'ROWNUM', 'RPAD', 'SAVEPOINT', 'SCHEMA', 'SECOND',
+                     'SELECT', 'SEQUENCE', 'SESSION', 'SET', 'SQL',
+                     'SQLCODE', 'SQLERRM','SQLTERMINATOR','STDDEV','STRUCTURE',
+                     'SUBSTR', 'SUBSTRB', 'SUM', 'SYNONYM', 'SYSDATE',
+                     'TABLE', 'TERMINATOR', 'TIMESTAMPADD', 'TIMESTAMPDIFF', 
+                     'TO_CHAR',
+                     'TO_DATE', 'TO_NUMBER', 'TRANSACTION', 'TRANSLATE', 
+                     'TRIGGER',
+                     'TRIM', 'TRUNC', 'TYPE', 'UCASE', 'UPDATE',
+                     'UPPER', 'USER', 'VARIABLE', 'VARIANCE', 'VIEW',
+                     'WEEK', 'WHILE', 'YEAR', 
+                   );
+
+   #for (@blue_bits){
+   #   $self->search_text_2(1, $_, "blue", $t, $curr);
+   #}
+
+   my @red_bits = ('[%(),;]'
+                  );
+
+   for (@red_bits){
+      $self->search_text_2(0, $_, "red", $t, $curr);
+   }
+
+   my @purple_bits = ('DATE','VARCHAR2','NUMBER','BFILE','CLOB',
+                      'LONG','CHAR'
+                  );
+
+   #for (@purple_bits){
+   #   $self->search_text_2(1, $_, "purple", $t, $curr);
+   #}
+}
+
+sub search_text_2 {
+   my ($self, $word_bound, $string, $tag, $t, $curr) = @_;
+
+   my($current, $length) = ($curr, 0);
+
+   if ($word_bound){
+      $string = '\b' . $string . '\b';
+   }
+
+   while (1){
+      $current = $$t->search(-regexp, -nocase, 
+                            -count=> \$length, $string, $current, 'end');
+      last if not $current;
+      $$t->tagAdd($tag, $current, "$current + $length char");
+      $current = $$t->index("$current + $length char");
+   }
+}
+
+# ======== Oracle Tablespace Tuning Tool ===========
+
+my ($tab_hlst, $tab_hlvl, $tabsp_sep, );
+my ($open_fold_bit,$close_fold_bit,$tabsp_bit);
+
+sub tabsp_hlist
+{
+   my $self = shift;
+   ($tab_hlst,$tabsp_sep) = @_;
+   $tab_hlvl = 1;
+
+   my $save_cb = $self->{Database_conn}->{ChopBlanks};
+
+   my $window = $self->{Main_window}->Toplevel();
+   $window->title("$tab_hlst");
+
+   my $loc_menu;
+   my $balloon;
+   $self->create_balloon_bars(\$loc_menu, \$balloon, \$window, );
+   $self->window_exit_button(\$loc_menu, \$window, 1, \$balloon, );
+
+   my $curr_tabdata = "          ";
+
+   $loc_menu->Label(-textvariable => \$curr_tabdata,
+                    -relief=>'sunken',
+                    -padx=>2,
+                    -pady=>2,
+                   )->pack(-side=>'left',
+                           -anchor=>'w');
+
+   my $frame1 = $window->Frame( -relief => 'groove',
+                             )->pack(-fill=>'both', 
+                                     -expand => 1,
+                                     -side => 'top' 
+                                    );
+
+   my $frame2 = $frame1->Frame( -relief => 'groove',
+                             )->pack(-fill=>'both', 
+                                     -expand => 1,
+                                     -side => 'top' 
+                                    );
+   my $canvas =
+            $frame1->Scrolled( 'Canvas',
+                               -relief=>'sunken',
+                               -bd=>2,
+                               -background=>$main::bc
+                             )->pack(-side=>'left',
+                                     -fill=>'both',
+                                     -expand=>'both'
+                             );
+
+   my $text2 = $frame1->Scrolled( "Text", 
+                                 -relief => 'groove',
+                                 -width => 50, 
+                                 -height => 10,
+                                 -cursor=>undef,
+                                 -foreground=>$main::fc,
+                                 -background=>$main::bc,
+                                 -font=>$main::font{name},
+                                 -wrap => "none",
+                                 -takefocus => 0,
+                                 -setgrid => 1
+                               )->pack(-side=>'left',
+                                       -fill=>'both',
+                                       -expand=>'both'
+                                      );
+
+   my $canvas_id;
+   $self->dev_jpeg_tabsp(\$canvas, \$canvas_id, 'DBATABSPACE');
+
+   $canvas->configure(-scrollregion=>[ $canvas->bbox("all") ]);
+   $canvas->pack(-expand=>'yes',-fill=>'both');
+
+   my $adjuster1 = $frame1->Adjuster();
+
+   $adjuster1->packAfter(  $canvas, 
+                           -side => 'left',
+                        );
+
+   $window->{text} =
+      $frame2->Scrolled('HList',
+                      -drawbranch=> 1,
+                      -separator=> $tabsp_sep,
+                      -indent=> 50,
+                      -selectmode=>'single',
+                      -browsecmd=>sub{
+                         $curr_tabdata = shift;
+
+                         if ($curr_tabdata =~ /:/){
+                            my ($tabspace, $datafile) = 
+                               split(/\:/, $curr_tabdata);
+                            $main::conn_comm_flag = 1;
+                            eval {
+                               $canvas->delete($canvas_id);
+                            };
+                            $main::conn_comm_flag = 0;
+   
+                            $window->Busy(-recurse=>1);
+                            $self->{Main_window}->Busy(-recurse=>1);
+
+                            $self->dev_jpeg_tabsp(\$canvas, 
+                                                 \$canvas_id, 
+                                                 'EXTENTID',
+                                                 $datafile
+                                                );
+                            $canvas->configure(
+                               -scrollregion=>[ $canvas->bbox("all") ]);
+                            $canvas->pack(-expand=>'yes',-fill=>'both');
+
+                            $self->{Main_window}->Unbusy;
+                            $window->Unbusy;
+                         }
+                                     },
+                      -width=> 80,
+                      -height=> 20,
+                      -font=>$main::font{name},
+                      -foreground=> $main::fc,
+                      -background=> $main::bc,
+                      -command=> sub {
+
+                            $self->show_or_hide_tabsp( \$text2,
+                                                       $_[0],
+                                                       $window,
+                                                       $window->{text},
+                                                     );
+
+                                     },
+
+                     )->pack(-fill=>'both',
+                             -expand=>'both',
+                             -side=>'top'
+                            );
+
+   my $adjuster2 = $frame1->Adjuster();
+
+   $adjuster2->packAfter(  $frame2,
+                           -side => 'top'
+                        );
+
+   $self->get_img( \$window, \$open_fold_bit, 'folder.open' );
+   $self->get_img( \$window, \$close_fold_bit, 'folder' );
+   $self->get_img( \$window, \$tabsp_bit, 'text' );
+
+   my $cm = $self->f_str( $tab_hlst ,'1');
+   print "prepare1: $cm\n" if ($main::debug > 0);
+   my $sth = $self->{Database_conn}->prepare( $cm )
+             or die $self->{Database_conn}->errstr;
+   $sth->execute;
+
+   my $bitmap = (tabsp_file_exist($self->{Database_type}, $tab_hlst, 2)
+                ? $close_fold_bit
+                : $tabsp_bit);
+   my @res;
+ 
+   my $count = 0;
+
+   while (@res = $sth->fetchrow)
+   {
+      my $owner = $res[0];
+      if (!$count){
+         $curr_tabdata = $owner;
+         $count++;
+      }
+      $window->{text}->add(  $owner,
+                             -itemtype=>'imagetext',
+                             -image=>$bitmap,
+                             -text=>$owner
+                          );
+   }
+   $sth->finish;
+
+   main::iconize( $window );
+
+   $self->{Database_conn}->{ChopBlanks} = $save_cb;
+}
+
+=head2 show_or_hide_tabsp
+
+A support function of tabsp_hlist, DO NOT CALL DIRECTLY!!!
+
+This is called when an entry is double-clicked.  It decides what to do.
+Basically ripped off from the "Adv. Perl Prog." book. :-)
+
+=cut
+
+sub show_or_hide_tabsp
+{
+   my $self = shift;
+
+   my (  $text2_ref,
+         $path,
+         $win,
+         $text,
+
+      ) = @_;
+
+   my $next_entry = $text->info('next', $path);
+   print "path=>$path< next_entry=$next_entry\n" if ($main::debug > 0);
+
+   # Is there another level?
+   my $x = $path;
+
+   print "before x=>$x<\n" if ($main::debug > 0);
+   #$x =~ s/[^.$tabsp_sep]//g;
+   $x =~ s/[^$tabsp_sep]//g;
+   print "after  x=>$x<\n" if ($main::debug > 0);
+
+   $tab_hlvl = length($x) + 1;
+   my $another_level = 
+      tabsp_file_exist($self->{Database_type},$tab_hlst, $tab_hlvl + 1);
+   if (!$another_level)
+   {
+      print "no more levels!\n" if ($main::debug > 0);
+      # change this next line if we desire
+      $self->do_a_tabsp($text2_ref, $win, $tabsp_sep, $tab_hlst, $path);
+      return;
+   }
+
+   # decide what to do
+   if (!$next_entry || (index ($next_entry, "$path$tabsp_sep") == -1))
+   {
+      # No. open it
+      #print "NO!\n";
+
+      $text->entryconfigure( $path,
+                             '-image' => $open_fold_bit
+                           );
+
+      $self->add_tabsp_contents( $path,
+                                 $text,
+                               );
+   }
+   else
+   {
+      # Yes. Close it by changing the icon, and deleting its subnode.
+      #print "YES!\n";
+
+      $text->entryconfigure( $path,
+                             '-image' => $close_fold_bit
+                           );
+
+      $text->delete('offsprings', $path);
+   }
+}
+
+=head2 add_tabsp_contents
+
+A support function of generic_hlist, DO NOT CALL DIRECTLY!!!
+
+show_or_hide calls this when it needs to add new items.
+Here is where the SQL is called.
+
+=cut
+
+sub add_tabsp_contents
+{
+   my $self = shift;
+
+   my ( $path,
+        $text,
+
+      ) = @_;
+
+   print "path=$path\n" if ($main::debug > 0);
+
+   # is there another level down?
+   my $x = $path;
+   #$x =~ s/[^.$tabsp_sep]//g;
+   $x =~ s/[^$tabsp_sep]//g;
+   $tab_hlvl = length($x) + 2;
+   my $bitmap = (tabsp_file_exist($self->{Database_type}, $tab_hlst, $tab_hlvl + 1)
+                ? $close_fold_bit
+                : $tabsp_bit);
+
+   # get the SQL & execute!
+   my $s = $self->f_str( $tab_hlst, $tab_hlvl);
+   print "prepare2: SQL>\n$s\n<\n ($path)\n" if ($main::debug > 0);
+   my $sth = $self->{Database_conn}->prepare( $s )
+      or die $self->{Database_conn}->errstr;
+
+   # in theory this should work, COOL! I didn't know you could
+   # give split a variable for the RE pattern. :-)
+
+   my @params = split("\\$tabsp_sep", $path);
+
+   print "add_tabsp_contents: tabsp_sep >$tabsp_sep<\n" if ($main::debug > 0);
+   print "add_tabsp_contents: params0 >$params[0]<\n" if ($main::debug > 0);
+   print "add_tabsp_contents: params1 >$params[1]<\n" if ($main::debug > 0);
+
+   # should we search $s for number of placeholders,
+   # and restrict @params to that number?
+
+   if ($self->{Database_type} ne 'Sybase') {
+       $sth->execute(@params);
+   } else {
+       $self->{Database_conn}->do("use @params");
+       $sth ->execute;
+   }
+
+   # fetch the values
+   my @res;
+   while (@res = $sth->fetchrow)
+   {
+      $self->post_tabsp( $tab_hlst, $tab_hlvl, [ \@res ], \@params );
+      # if the result has multiple columns, assume there will only be 1 row,
+      # but we should display the columns as rows; but if there is only
+      # 1 column, assume we'll get multiple rows/fetchs
+      if ($#res > 0)
+      {
+         for (0 .. $#res)
+         {
+            my $gen_thing = "$path.$sth->{NAME}->[$_] = $res[$_]";
+
+            $text->add(  $gen_thing,
+                                     -itemtype => 'imagetext',
+                                     -image    => $bitmap,
+                                     -text     => $gen_thing,
+                                  );
+         }
+         last;
+      }
+      else
+      {
+         my $gen_thing = "$path" . $tabsp_sep . "$res[0]";
+
+         $text->add(  $gen_thing,
+                                  -itemtype => 'imagetext',
+                                  -image    => $bitmap,
+                                  -text     => $gen_thing
+                               );
+      }
+   }
+   $sth->finish;
+}
+
+sub tabsp_file_exist
+{
+   my ($type, $sub, $number) = @_;
+
+   # FindBin::RealBin patch below supplied by Bruce Albrecht,
+   # 9/9/99
+
+   my $file =
+      sprintf("$FindBin::RealBin/sql/%s/%s.%d.sql",$type,$sub,$number);
+
+   print "tabsp_file_exist: $file\n" if ($main::debug > 0);
+   return (-r $file);
+}
+
+sub do_a_tabsp {
+
+   my $self = shift;
+
+   # On the final level of an HList, does the actual work
+   # required.
+
+   my ($text2_ref, $l_mw, $l_tabsp_sep, $l_hlst, $input) = @_;
+
+   $l_mw->Busy(-recurse=>1);
+   my $owner;
+   my $generic;
+   my $dum;
+
+   ($owner, $generic, $dum) = split("\\$l_tabsp_sep", $input);
+
+   # We may be using pretty :-) icons instead of text.  If so,
+   # we gotta give help to let people know what the icons are.
+
+   my $cm;
+
+   #my $obj = DDL::Oracle->new(
+   #                            type => $l_hlst_to_type{ $l_hlst },
+   #                            list => [
+   #                                      [
+   #                                        $owner,
+   #                                        $generic || $owner,
+   #                                      ]
+   #                                    ],
+   #                          );
+   #$text_lines = $obj->create ;
+
+   # Finally, pump out the monkey
+
+   $$text2_ref->insert('end', "$owner $generic");
+
+   $l_mw->Unbusy;
+}
+
+=head2 post_tabsp
+
+This subroutine is called with the results from show_sql() to allow DB
+modules to "post process" the output, if required, before it is analyzed
+to be shown.
+This is useful for turning numeric flags into words, and other such DB
+dependent things.
+This generic one does NOTHING!
+
+=cut
+
+sub post_tabsp
+{
+   my $self = shift;
+   return;
+}
+
+sub dev_jpeg_tabsp {
+   my $self = shift;
+   my ( $canv_ref, $canv_id_ref, $graph_type, $param1 ) = @_;
+
+   # Creates Tables Viewer window
+
+   my $cm = $self->f_str('dev_jpeg',$graph_type);
+   my $sth = $self->{Database_conn}->prepare( $cm ) ||
+                die $self->{Database_conn}->errstr;
+
+   if ($graph_type =~ /^EXTENTID$/) {
+      $sth->bind_param(1,$param1);
+   }
+
+   $sth->execute;
+   my $detected = 0;
+
+   my @res;
+   my $window;
+
+   my $dbh;
+   my $rsth;
+   my $csth;
+   my $title_element;
+   my $x_axis;
+   my $y_axis;
+   my $show_values = 1;
+   my $three_d = 1;
+   my $chart_width = 700;
+
+   my $flip_switch = 0;
+   my $old_hold ;
+   my $hold1 = 0.0;
+   my $hold2 = 0.0;
+
+   my $color_string = 'COLOR=(lred,lgreen,lorange,marine,pink,yellow,lpurple)';
+
+   while (@res = $sth->fetchrow) {
+      $detected++;
+
+      if($detected == 1){
+
+         $dbh = DBI->connect('dbi:Chart:');
+
+         if (($graph_type =~ /^DBATABSPACE$/)) {
+            $show_values = 0;
+            $three_d = 0;
+            $dbh->do('CREATE TABLE bars (tabspace CHAR(30), Total FLOAT, '.
+                     'Used FLOAT, Free FLOAT)');
+            $csth = $dbh->prepare('INSERT INTO bars VALUES(?, ?, ?, ?)');
+         } else {
+            $dbh->do('CREATE TABLE bars (objtype CHAR(20), objcnt FLOAT)');
+            $csth = $dbh->prepare('INSERT INTO bars VALUES( ?, ?)');
+         }
+
+         if ($graph_type =~ /^OBJCNT$/) {
+            $title_element = "User Objects";
+            $x_axis = "Object Type";
+            $y_axis = "Object Count";
+         } elsif ($graph_type =~ /^EXTENTID$/) {
+            $three_d = 0;
+            $chart_width = 0;
+            $color_string = 'COLOR=(lgreen)';
+            $title_element = $res[0] . "\n($Block_Size ".
+                             "Bytes per Block)";
+            $x_axis = "Segments";
+            $y_axis = "Bytes";
+         } elsif (($graph_type =~ /^DBAOBJCNT$/)) {
+            $title_element = "DBA Objects";
+            $x_axis = "Object Type";
+            $y_axis = "Object Count";
+         } elsif (($graph_type =~ /^INVDBAOBJCNT$/)) {
+            $title_element = "All Invalid DBA Objects";
+            $x_axis = "Invalid Object Type";
+            $y_axis = "Invalid Object Count";
+         } elsif (($graph_type =~ /^ALLOBJCNT$/)) {
+            $title_element = "All Objects";
+            $x_axis = "Object Type";
+            $y_axis = "Object Count";
+         } elsif (($graph_type =~ /^INVALLOBJCNT$/)) {
+            $title_element = "All Invalid Objects";
+            $x_axis = "Invalid Object Type";
+            $y_axis = "Invalid Object Count";
+         } elsif (($graph_type =~ /^INVOBJCNT$/)) {
+            $title_element = "Invalid User Objects";
+            $x_axis = "Invalid Object Type";
+            $y_axis = "Invalid Object Count";
+         } elsif (($graph_type =~ /^DBATABSPACE$/)) {
+            $title_element = "TableSpace Allocations";
+            $x_axis = "TableSpace";
+            $y_axis = "Space Allocations (MB)";
+         } elsif (($graph_type =~ /^TABSPACE$/)) {
+            $title_element = "Free TableSpace";
+            $x_axis = "TableSpace";
+            $y_axis = "Free Space (MB)";
+         } else {
+            $title_element = $graph_type;
+            $x_axis = "X-Axis";
+            $y_axis = "Y-Axis";
+         }
+      }
+      if (($graph_type =~ /^DBATABSPACE$/)) {
+         if ($flip_switch){
+            $csth->execute($res[1], $hold1, $hold1 - $res[2], $res[2]);
+         } else {
+            $hold1 = $res[2];
+         }
+      } elsif ($graph_type =~ /^EXTENTID$/) {
+
+         if (length($res[1]) > 18){
+            $res[1] = substr($res[1],1,18) . "..";
+         }
+         $csth->execute($res[1], $res[2]);
+         $chart_width += 20;
+      } else {
+         $csth->execute($res[0], $res[1]);
+      }
+
+      if ($flip_switch){
+         $flip_switch = 0;
+      } else {
+         $flip_switch = 1;
+      }
+   }
+   $sth->finish;
+
+   if($detected == 0){
+      $self->{Main_window}->Busy(-recurse=>1);
+      main::mes($self->{Main_window},$main::lg{no_rows_found});
+      $self->{Main_window}->Unbusy;
+   } else {
+      $csth->finish;
+
+      if ($chart_width < 700){
+         $chart_width = 700;
+      }
+
+      $rsth = $dbh->prepare(
+         'SELECT BARCHART FROM bars ' .
+         'WHERE WIDTH=' . $chart_width . ' AND HEIGHT=300 ' .
+         'AND X-AXIS=\'' . $x_axis . 
+         '\' AND Y-AXIS=\'' . $y_axis . '\' AND ' .
+         'X-ORIENT=\'VERTICAL\' AND ' .
+         'FORMAT=\'JPEG\' AND ' .
+         'TITLE = \'' . $title_element . 
+         '\' AND 3-D=' . $three_d . ' ' .
+         'AND SHOWVALUES=' . $show_values . ' AND ' .
+         $color_string
+      );
+
+         # white, lgray, gray, dgray, black, 
+         # lblue, blue, dblue, gold, lyellow, yellow, 
+         # dyellow, lgreen, green. dgreen,
+         # lred, red, dred, lpurple, purple, 
+         # dpurple, lorange, orange, pink, 
+         # dpink, marine, cyan, lbrown, dbrown. 
+      
+      my $buf;
+
+      $rsth->execute;
+      $rsth->bind_col(1, \$buf);
+      $rsth->fetch;
+      open OUTF, ">$main::orac_home/dev_jpeg.jpeg";
+      binmode OUTF;
+      print OUTF $buf;
+      close OUTF;
+      $rsth->finish;
+      $dbh->do('DROP CHART bars');
+      $dbh->disconnect;
+      
+      my $img = 
+         $$canv_ref->Photo( -file => "$main::orac_home/dev_jpeg.jpeg",
+                            -format => 'jpeg');
+      $$canv_id_ref = $$canv_ref->create( 'image',5,5, 
+                                          '-anchor' => 'nw', 
+                                          '-image'  => $img );
+      
+      $$canv_ref->pack(-expand=>'yes',-fill=>'both');
+   }
+}
+# ======== Oracle Tablespace Tuning Tool ===========
 
 1;

@@ -15,4 +15,5 @@ maroon2
 orchid1
 plum2
 mediumpurple2
+black
 white

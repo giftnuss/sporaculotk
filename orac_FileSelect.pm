@@ -350,7 +350,7 @@ sub Update {
 
    # Turn on the busy cursor.
 
-   $self->{window}->Busy;
+   $self->{window}->Busy(-recurse=>1);
    $self->{window}->idletasks;
 
    $self->{window}->{text}->DeleteAll;

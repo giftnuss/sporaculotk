@@ -1,4 +1,3 @@
-
 #
 # vim:ts=2:sw=2
 # Package: Orac::Shell::Format
@@ -11,6 +10,12 @@ use DBI::Format;
 use Data::Dumper;
 use strict;
 
+use Exporter ();
+use vars qw(@ISA $VERSION);
+$VERSION = $VERSION = q{1.0};
+@ISA=('Exporter');
+
+
 my $formats;
 sub load_formats {
     my ($sh) = @_;
@@ -20,9 +25,9 @@ sub load_formats {
 
 	$formats = DBI::Format::available_formatters;
 
-    foreach my $where (qw(Shell/Format Shell_Format)) {
-	my $mod = $where; $mod =~ s!/!::!g;
-	my @dir = map { -d "$_/$where" ? ("$_/$where") : () } @INC;
+    foreach my $where (qw{Shell/Format Shell_Format}) {
+	my $mod = $where; $mod =~ s!/!::!g; #/
+	my @dir = map { -d qq{$_/$where} ? (qq{$_/$where}) : () } @INC;
 	foreach my $dir (@dir) {
 	    opendir DIR, $dir or warn "Unable to read $dir: $!\n";
 	    push @pi, map { s/\.pm$//; "${mod}::$_" } grep { /\.pm$/ }

@@ -1,5 +1,6 @@
+/* Thanks to Andre Seesink for Sid,Serial change to ease session control */
 select s.username "User", s.osuser "OS User",
-       s.sid "Sid",           
+       s.sid||','||s.serial# "Sid,Serial",           
        decode(s.type, 'USER', 'User', 'BACKGROUND', 'Backgd', s.type) "Type",
        decode(s.status,'INACTIVE','Inact ' || 
                                   round((s.last_call_et/60),0) || 

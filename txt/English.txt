@@ -1,4 +1,5 @@
 about_orac^About Orac & Terms of Use^
+allobjcnt^All Object Count^
 apply^Apply^
 auto_clear^Automatic Clearance of Screen, Press Switch for Manual^
 ind_crt^Create Index^
@@ -10,7 +11,7 @@ add_butt_mess^Please pick the cascade you wish to attach button to^
 add_button^Add Button^
 add_cascade^Add Cascade^
 are_you_sure^Please Confirm^
-back_col_menu^Background Colour Menu^
+back_col_menu^Background Colour^
 back_dir^Go Back a Directory^
 back_procs^Background Processes^
 bar_col^red^
@@ -22,6 +23,7 @@ cancel^Cancel^
 casc_text^Cascade Text^
 cascade^Cascade^
 change_dbtyp^Change DB^
+chart^Chart^
 choose_butt^Choose Button^
 choose_casc^Choose Cascade^
 clear^Clear Screen^
@@ -55,6 +57,8 @@ db_mon^Database Monitor^
 db_recr_sql^Database Recreation SQL^
 db_type^Database Type^
 dba_views^DBA Tables Viewer^
+dbaobjcnt^DBA Object Count^
+dbatabspace^Tablespace Allocations^
 dbish^Orac Shell (GUI dbish)^
 dbwr^Database Writer^
 dbwr_io_rp^DBWR I/O Report^
@@ -78,6 +82,7 @@ det_tab_datafil^Detailed Chart by Tablespace/Datafile^
 dev_crt^Create Database Device^
 dev_dump_crt^Create Dump Device^
 dev_rev^Reverse Engineer Database Devices^
+devel^Devel^
 diag^Diagnostics^
 diag_ind^Find Bad Indexes^
 disconn^Disconnected...^
@@ -88,6 +93,7 @@ doub_click^Double-Click Selection^
 ed_sql_mess2^Please pick a Button^
 ed_sql_mess^Please pick a Cascade^
 ed_sql_txt^Edit the SQL Text and save its attachment to Button^
+entry_col_menu^Text Entry Colour^
 err_obj^Errored Objects^
 execute_sql^Execute SQL^
 exit^Exit^
@@ -101,10 +107,13 @@ file_viewer^Main File Viewer^
 font_message^Please Create a New Font^
 font_sel^Font Selector^
 font_warning^If New Font doesn't display, change Parameters & Re-Apply^
+fore_col_menu^Foreground Colour^
 form_short^Form^
 form^Interactive Form^
 form_for^Form for^
 freespace^Free Space within Data Object^
+frag^Genereate SQL to improve fragmentation in the database^
+frag_ind^Genereate SQL to improve fragmentation in the database^
 full^Full^
 funcs^Functions^
 gh_summ_sess^Summary of Session Waits & CPU^
@@ -128,6 +137,9 @@ indexs^Indexes^
 info^Information^
 inval_obj^Invalid Object SQL^
 investgn^Investigation^
+invallobjcnt^Invalid All Object Count^
+invdbaobjcnt^Invalid DBA Object Count^
+invobjcnt^Invalid User Object Count^
 lck^Lock^
 lcks_held^Locks Currently Held^
 lgwr^Log Writer^
@@ -140,7 +152,7 @@ logdon_usrs^Current Logged on Users^
 logical_struct^Logical Structures^
 login_crt^Create Server Login^
 login_rev^Reverse Engineer Login Creation^
-login_txt^DBA User Connection^
+login_txt^User Connection^
 ls_all^List All Objects in Current Database^
 lt_wtrs^Latch Waiters^
 ltchs^Latches^
@@ -170,6 +182,7 @@ no_val_def^No Value Defined^
 normal^Normal^
 not_conn^Not Connected^
 obj^Object^
+objcnt^User Object Count^
 oi_blobs^Blobs^
 oi_chunks^Chunks^
 oi_col_attbs^Column attributes^
@@ -223,6 +236,7 @@ raw_db_sql^Raw Database Component SQL^
 rec_of^Record of^
 reconn^Reconnect^
 recrt_base_sql^Recreation SQL for svrmgrl^
+refresh_grps^Refresh Groups^
 reg_usrs^Registered Users on Database^
 rem_srv_crt^Create Remote Server^
 rep^Report^
@@ -251,12 +265,13 @@ sess_mem^Session Memory Consumption^
 sess_uga_max^Total Session UGA Max^
 sess_wt_stats^Top ORACLE Wait events^
 sga_stat^Main SGA Stats^
+sga_figs^SGA Figures^
 sga_stats^Fuller SGA Stats Info^
 sh_prms^Show Parameters^
 shared_pool_sql^Shared Pool & SQL^
 shell^Shell^
 sizeindex^Work out the Size of any Required Index^
-snap_logs^SnapshotLogs^
+snap_logs^Snapshot Logs^
 snaps^Snapshots^
 sort_mon^Sort Monitor^
 sorts^Sorts^
@@ -274,16 +289,18 @@ stop^Stop^
 struct^Structure^
 summ_tabsp^Summary Chart by Tablespace^
 synyms^Synonyms^
-sys_pass^DBA User Password^
-sys_user^DBA User^
+sys_pass^User Password^
+sys_user^User^
 systabs^System Tables^
-system_please^Please enter a DBA user password^
+system_please^Please enter a user password^
 tabs^Tables^
 tabsp^Tablespace^
+tabsp_br^Tablespace Breakdown^
 tabsp_frag^Tablespace Fragmentation^
 tabsp_sp_shorts^Tablespace Space Shortages^
 tabsp_tune^Tablespace Tuning^
 tabsp_txt^Tablespace Text Report^
+tabspace^Free Tablespace^
 tape^Tape^
 tbl_crt^Create Table^
 tbl_rev^Reverse Engineer All Objects in the Database^
@@ -300,8 +317,9 @@ upd_cascade^Update Cascade^
 use_utlxplan^Please run utlxplan.sql to create user's PLAN_TABLE, for 'Explain Plan' option.^
 user^User^
 user_access^User Access^
+userhits^User Hit Ratios^
 user_obj^User Objects^
-user_please^Please enter a DBA user with at least main 'Select' privileges^
+user_please^Please enter a user with at least main 'Select' privileges^
 user_proc_io^Any User Processes Performing I/O?^
 user_process^User Processess^
 user_record^User Records^
@@ -315,6 +333,7 @@ vers_info^Version Info^
 views^Views^
 what_sql^What SQL^
 what_sql_users^What SQL statements are Users Processing?^
+what_memory^What SQL objects are currently loaded in memory?^
 who_accs_obj^Who's accessing which objects?^
 who_hold^Who's holding back Whom?^
 wrong_dbi^You may have selected the wrong database type for your system^

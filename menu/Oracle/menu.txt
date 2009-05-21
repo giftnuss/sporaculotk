@@ -1,3 +1,19 @@
+Menubutton^devel^
+cascade^data_obj^
+casc_command^0^1^oi_tables^$main::current_db->dev_tables^'TABLE'^
+casc_command^0^1^indexs^$main::current_db->dev_tables^'INDEX'^
+casc_command^0^1^views^$main::current_db->dev_tables^'VIEW'^
+casc_command^0^1^oi_synonyms^$main::current_db->dev_tables^'SYNONYM'^
+casc_command^0^1^seqs^$main::current_db->dev_tables^'SEQUENCE'^
+casc_command^0^1^oi_synonyms^$main::current_db->dev_tables^'SYNONYM'^
+casc_command^0^1^constrnts^$main::current_db->dev_tables^'CONSTRAINT'^
+separator^
+cascade^pl_sql^
+casc_command^0^1^oi_procedures^$main::current_db->dev_tables^'PROCEDURE'^
+casc_command^0^1^funcs^$main::current_db->dev_tables^'FUNCTION'^
+casc_command^0^1^pck_hds^$main::current_db->dev_tables^'PACKAGE'^
+casc_command^0^1^pck_bods^$main::current_db->dev_tables^'PACKAGE_BODY'^
+casc_command^0^1^trggrs^$main::current_db->dev_tables^'TRIGGER'^
 Menubutton^struct^
 command^0^0^summ_tabsp^$main::current_db->tab_det_orac^$main::lg{summ_tabsp}+'tabspace_diag'+1^
 command^0^0^det_tab_datafil^$main::current_db->tab_det_orac^$main::lg{det_tab_datafil}+'tab_det_orac'+1^
@@ -37,6 +53,7 @@ casc_command^0^0^comments^$main::current_db->generic_hlist^'Comments'+'.'^
 cascade^snaps^
 casc_command^0^0^snaps^$main::current_db->generic_hlist^'Snapshots'+'.'^
 casc_command^0^0^snap_logs^$main::current_db->generic_hlist^'SnapshotLogs'+'.'^
+#casc_command^0^0^refresh_grps^$main::current_db->generic_hlist^'Refreshgroups'+'.'^
 separator^
 cascade^sql_crt_states^
 casc_command^0^1^constrnts^$main::current_db->all_stf^'Constraints'+'99'+2^

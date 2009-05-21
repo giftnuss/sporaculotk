@@ -187,9 +187,22 @@ sub show_sql
    }
    else
    {
-      $self->print_lines($header, $r_lines, $r_tlen, $r_format);
+      if ( $sql_name eq 'steps' )
+      {
+        my $obj = DDL::Oracle->new(
+                                   type => 'components',
+                                   list => [[undef]],
+                                 );
+       my $text= $obj->create ;
+  
+       $self->{Text_var}->insert('end', "\n$text\n");
+      }
+      else
+      {
+        $self->print_lines($header, $r_lines, $r_tlen, $r_format);
+        $self->see_plsql($sql);
+      }
    }
-   $self->see_plsql($sql);
 }
 
 # support func for show_sql
@@ -926,7 +939,8 @@ sub show_or_hide
    my $x = $path;
 
    #print STDERR "before x=>$x<\n" if ($main::debug > 0);
-   $x =~ s/[^.$gen_sep]//g;
+   #$x =~ s/[^.$gen_sep]//g;
+   $x =~ s/[^$gen_sep]//g;
    #print STDERR "after  x=>$x<\n" if ($main::debug > 0);
 
    $g_hlvl = length($x) + 1;
@@ -990,7 +1004,8 @@ sub add_contents
 
    # is there another level down?
    my $x = $path;
-   $x =~ s/[^.$gen_sep]//g;
+   #$x =~ s/[^.$gen_sep]//g;
+   $x =~ s/[^$gen_sep]//g;
    $g_hlvl = length($x) + 2;
    my $bitmap = (sql_file_exists($self->{Database_type}, $g_hlst, $g_hlvl + 1)
                 ? $closed_folder_bitmap
@@ -1190,7 +1205,7 @@ sub see_sql_but {
 
                           -command=> sub{
 
-                             $$win_ref->Busy;
+                             $$win_ref->Busy(-recurse=>1);
                              $self->see_sql($$win_ref,$$cm_ref);
                              $$win_ref->Unbusy;
 
