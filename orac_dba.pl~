@@ -40,10 +40,15 @@ require 5.6.0;
 use Tk '800.000';
 
 use FindBin;
-use lib $FindBin::RealBin;
+use lib ($FindBin::RealBin, $FindBin::RealBin . '/lib');
+
+# Option handling 
+# TODO
+
+# Load Configuration
+# TODO
 
 # Splash Screen
-
 main::splash_screen(0);
 
 # More requirements, and the rest of the code to be loaded
@@ -319,7 +324,7 @@ my $b = $bb->Button(-image=>$b_image,
                     -command=>sub{main::bz();
                                   main::splash_screen(1);
                                   main::ubz()}
-                   )->pack(side=>'left');
+                   )->pack(-side=>'left');
 
 # The Reconnection Button
 
@@ -329,7 +334,7 @@ $b = $bb->Button(-image=>$b_image,
                  -command=>sub{main::bz();
                                main::get_db();
                                main::ubz()}
-                )->pack(side=>'left');
+                )->pack(-side=>'left');
 
 $main::balloon->attach($b, -msg => $main::lg{reconn});
 
@@ -348,7 +353,7 @@ $b = $bb->Button(-image=>$b_image,
       $monitor->orac_monitor();
       main::ubz()}
 
-                )->pack(side=>'left');
+                )->pack(-side=>'left');
 
 $main::balloon->attach($b, -msg => $main::lg{db_mon});
 
@@ -368,7 +373,7 @@ $font_button = $bb->Button(-image=>$b_image,
       main::ubz();
                                            }
 
-                             )->pack(side=>'left');
+                             )->pack(-side=>'left');
 
 main::font_button_message(\$main::balloon, \$font_button);
 
@@ -387,7 +392,7 @@ $b = $bb->Button(-image=>$b_image,
       $printer->orac_printer();
       main::ubz()}
 
-                )->pack(side=>'left');
+                )->pack(-side=>'left');
 
 $main::balloon->attach($b, -msg => $main::lg{print_sel});
 
@@ -397,7 +402,7 @@ $b = $bb->Button(-image=>$b_image,
                  -command=>sub{main::bz();
                                $main::current_db->must_f_clr();
                                main::ubz()}
-                )->pack(side=>'left');
+                )->pack(-side=>'left');
 
 $main::balloon->attach($b, -msg => $main::lg{clear});
 
@@ -459,7 +464,7 @@ foreach my $key (@file_viewers)
 
                                  }
 
-                   )->pack(side=>'left');
+                   )->pack(-side=>'left');
 
    $main::balloon->attach($b, -msg => $main::lg{$key});
 
@@ -761,7 +766,7 @@ sub get_connected {
                         -textvariable=>\$main::sys_user,
                         -foreground=>$main::fc,
                         -background=>$main::ec
-                       )->pack(side=>'right');
+                       )->pack(-side=>'right');
 
       my $l3 = $c_d->Label(-text=>$main::lg{sys_pass} . ':',
                            -anchor=>'e',
@@ -771,7 +776,7 @@ sub get_connected {
                         -show=>'*',
                         -foreground=>$main::fc,
                         -background=>$main::ec
-                       )->pack(side=>'right');
+                       )->pack(-side=>'right');
 
       my $l4 = $c_d->Label(-text=>$main::lg{db_type} . ':',
                            -anchor=>'e',
@@ -1908,7 +1913,7 @@ sub config_Jared_tools {
                        -background=>$main::ec,
                        -width=>40
 
-                      )->pack(side=>'right');
+                      )->pack(-side=>'right');
 
       # Stand by your priests!
 
@@ -2711,6 +2716,10 @@ sub font_button_message {
    return $font;
 }
 
+
+###################
+# SPLASH SCREEN
+###################
 sub splash_screen {
 
    my($please_destroy_flag) = @_;
@@ -2728,9 +2737,10 @@ sub splash_screen {
           "+" . 
           int(($main::splash_screen->screenheight)/2 - 
               ($splash_image->height)/2));
-   
+
    my $splash_label = 
       $main::splash_screen->Button( -image => $splash_image,
+                                    -command => \&destroy_splash
                                   )->pack(-fill=>'both', -expand => 1);
    Tk::update($main::splash_screen);
 

@@ -40,10 +40,15 @@ require 5.6.0;
 use Tk '800.000';
 
 use FindBin;
-use lib $FindBin::RealBin;
+use lib ($FindBin::RealBin, $FindBin::RealBin . '/lib');
+
+# Option handling 
+# TODO
+
+# Load Configuration
+# TODO
 
 # Splash Screen
-
 main::splash_screen(0);
 
 # More requirements, and the rest of the code to be loaded
@@ -111,7 +116,8 @@ if(defined($ENV{ORAC_DEBUG})) {
    $main::debug = int($ENV{ORAC_DEBUG});
 }
 else {
-   $main::debug = 0;
+   # no matter for the moment
+   $main::debug = 1;
 }
 
 if(defined($ENV{DBI_SHELL})) {
@@ -2711,6 +2717,10 @@ sub font_button_message {
    return $font;
 }
 
+
+###################
+#  SPLASH SCREEN
+###################
 sub splash_screen {
 
    my($please_destroy_flag) = @_;
@@ -2728,9 +2738,10 @@ sub splash_screen {
           "+" . 
           int(($main::splash_screen->screenheight)/2 - 
               ($splash_image->height)/2));
-   
+
    my $splash_label = 
       $main::splash_screen->Button( -image => $splash_image,
+                                    -command => \&destroy_splash
                                   )->pack(-fill=>'both', -expand => 1);
    Tk::update($main::splash_screen);
 

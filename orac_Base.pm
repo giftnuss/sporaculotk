@@ -85,7 +85,7 @@ Start documenting here next time...
 
 sub new
 {
-   #print STDERR "orac_Base::new\n" if ( $main::debug > 0 );
+   print STDERR "orac_Base::new\n" if ( $main::debug > 0 );
    my $proto = shift;
    my $class = ref($proto) || $proto;
    my $self  = {};
